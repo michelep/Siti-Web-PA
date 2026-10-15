@@ -24,7 +24,7 @@ require_once __DIR__ . '/header.inc.php';
 
                 <p>
                     La piattaforma sfrutta esclusivamente software libero, è basata sul stack tecnologico LAMP
-                    ed impiega strumenti di analisi open-source come <strong>WhatWeb</strong>, <strong>Subfinder</strong> e <strong>Nuclei</strong>.
+                    ed impiega strumenti di analisi open-source come <strong>WhatWeb</strong> e <strong>Subfinder</strong>.
                 </p>
 
                 <div class="alert alert-info border-0 shadow-sm mt-4" role="alert">
@@ -32,9 +32,14 @@ require_once __DIR__ . '/header.inc.php';
                     <p class="mb-0">
                         Non vengono effettuate azioni invasive sui bersagli: le analisi si limitano esclusivamente
                         ad un'attività di <em>discovery</em> di quanto pubblicamente esposto. Non viene eseguita
-                        alcuna attività di penetration testing né tentativi di brute forcing su servizi protetti da autenticazione.
+                        alcuna attività di vulnerability assesment, penetration testing né tentativi di brute forcing
+                        su servizi protetti da autenticazione.
                     </p>
                 </div>
+
+                <p>
+                    Il codice del progetto è pubblicamente disponibile su GitHub <a href="https://github.com/michelep/Siti-Web-PA">github.com/michelep/Siti-Web-PA</a>.
+                </p>
             </div>
         </div>
     </div>
