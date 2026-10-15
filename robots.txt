@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /ajax/
+Disallow: /config/
+Disallow: /vendor/
+
+Sitemap: https://pa.zerozone.it/sitemap.php

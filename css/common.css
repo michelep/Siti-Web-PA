@@ -1,0 +1,121 @@
+:root {
+  --pa-bg-body: #f8fafc;
+  --pa-card-border: #e2e8f0;
+  --pa-text-main: #0f172a;
+  --pa-text-muted: #64748b;
+  --pa-primary: #0284c7;
+}
+
+body {
+  background-color: var(--pa-bg-body);
+  color: var(--pa-text-main);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Header Glassmorphism */
+.navbar-custom {
+  background-color: rgba(15, 23, 42, 0.95) !important;
+  backdrop-filter: blur(8px);
+}
+
+/* Modern Card Styling */
+.card-stat {
+  background: #ffffff;
+  border: 1px solid var(--pa-card-border);
+  border-radius: 12px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card-stat:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+}
+
+/* Metric Icon Wrappers */
+.icon-shape {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+}
+
+/* Image Screenshot Preview Cards */
+.card-preview {
+  border: 1px solid var(--pa-card-border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #ffffff;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card-preview:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 20px -5px rgba(0, 0, 0, 0.08);
+}
+
+.card-preview .card-img-top {
+  height: 180px;
+  object-fit: cover;
+  border-bottom: 1px solid var(--pa-card-border);
+}
+
+/* Table Card Wrapper */
+.table-card {
+  background: #ffffff;
+  border: 1px solid var(--pa-card-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+main > .container {
+    padding: 60px 15px 0;
+}
+
+/*
+ * Cards
+ */
+
+.card {
+    overflow:hidden;
+    padding: 10px;
+    padding-top: 15px;
+    margin: 5px;
+    border: 0px;
+}
+
+.card-row {
+    margin-bottom: 10px;
+}
+
+.card-block .rotate {
+    z-index: 8;
+    float: right;
+    height: 100%;
+    padding: 5px;
+}
+
+.card-block .rotate i {
+    color: rgba(20, 20, 20, 0.15);
+    position: absolute;
+    left: 0;
+    left: auto;
+    right: -10px;
+    bottom: 0;
+    display: block;
+    -webkit-transform: rotate(-44deg);
+    -moz-transform: rotate(-44deg);
+    -o-transform: rotate(-44deg);
+    -ms-transform: rotate(-44deg);
+    transform: rotate(-44deg);
+}
+
+.card-columns {
+  @include media-breakpoint-only(lg) {
+    column-count: 4;
+  }
+  @include media-breakpoint-only(xl) {
+    column-count: 5;
+  }
+}

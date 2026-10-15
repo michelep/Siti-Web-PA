@@ -1,0 +1,6 @@
+{
+    "require": {
+        "monolog/monolog": "^3.10",
+        "daandesmedt/phpheadlesschrome": "^1.1"
+    }
+}

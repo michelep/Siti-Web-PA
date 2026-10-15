@@ -1,0 +1,17 @@
+/config
+/temp
+/screenshots
+/.well-known
+
+# Log e Lock
+*.log
+*.lock
+
+# Screenshot e file temporanei scaricati
+/screenshots/*.jpg
+!/screenshots/none.jpg
+/setup/enti.json
+/setup/IT.txt
+
+# Cache e pacchetti sviluppatore
+/vendor/
