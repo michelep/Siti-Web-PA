@@ -1,4 +1,11 @@
-RedirectMatch 404 /\.git
+# Blocco di sicurezza per qualsiasi file o cartella .git
+RewriteEngine On
+RewriteRule ^(?:\.git(?:\/.*)?|\.gitignore|\.gitattributes)$ - [F,L,NC]
+
+# Protezione alternativa via RedirectMatch/FilesMatch
+<FilesMatch "^(?:\.git|\.gitignore|\.gitattributes)">
+    Require all denied
+</FilesMatch>
 
 <ifModule mod_rewrite.c>
     RewriteEngine on
