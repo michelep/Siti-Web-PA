@@ -138,4 +138,14 @@ $ogImage = isset($gbOgImage) && is_string($gbOgImage) ? $gbOgImage : 'https://' 
             </div>
         </nav>
     </header>
-    <div style="margin-top: 70px;"></div>
+    <!-- BANNER DISCLAIMER -->
+    <div style="margin-top:32px" class="bg-warning-subtle border-bottom border-warning py-2">
+        <div class="container">
+            <div class="d-flex align-items-center justify-content-center text-center small text-warning-emphasis">
+                <i class="bi bi-exclamation-triangle-fill fs-6 me-2 flex-shrink-0 text-warning"></i>
+                <div>
+                    <strong>ATTENZIONE</strong> I dati visualizzati sono raccolti tramite procedure automatizzate a scopo di analisi e monitoraggio. Non si fornisce alcuna garanzia di accuratezza, completezza o veridicità delle informazioni mostrate.
+                </div>
+            </div>
+        </div>
+    </div>
