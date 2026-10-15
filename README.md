@@ -44,13 +44,17 @@ Il sistema si appoggia su tre tabelle principali:
 ### 1. Clona il Repository
 ```bash
 git clone git@github.com:michelep/Siti-Web-PA.git
+```
 
 ### 2. Configura l'accesso al Database
+
 ```bash
 mkdir ~/config
+```
 
 crea il file config.inc.php ed aggiungi l'array di configurazione database:
 
+```
 <?php
 
 $CFG["dbHost"] = 'localhost';
@@ -59,5 +63,6 @@ $CFG["dbUser"] = '';
 $CFG["dbPass"] = '';
 
 ?>
+```
 
 successivamente caricare lo schema del database in ~/setup/pa.sql e, er finire, aggiungere nel crontab l'esecuzione oraria di ~/cron/hourly.php
