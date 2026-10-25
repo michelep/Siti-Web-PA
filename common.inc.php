@@ -25,6 +25,8 @@ if (!isset($logger)) {
     $logger->pushHandler(new StreamHandler(APP_ROOT . '/logs/pa_zerozone.log', Level::Debug));
 }
 
+const BOT_USER_AGENT = 'Mozilla/5.0 (compatible; SitiWebPA-Bot/2.0; +https://pa.zerozone.it/about; o-zone@zerozone.it)';
+
 // Global Security Headers
 if (!headers_sent()) {
     header('X-Content-Type-Options: nosniff');

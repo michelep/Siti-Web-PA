@@ -2,6 +2,7 @@
 /temp
 /screenshots
 /.well-known
+/.git
 
 # Log e Lock
 *.log

@@ -92,7 +92,7 @@ try {
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 3,
-            CURLOPT_USERAGENT      => 'SitiWebPA-Monitor/2.0'
+            CURLOPT_USERAGENT      => BOT_USER_AGENT,
         ]);
 
         $response = curl_exec($ch);
@@ -154,7 +154,7 @@ try {
                 CURLOPT_MAXREDIRS      => 5,
                 CURLOPT_TIMEOUT        => 12,
                 CURLOPT_CONNECTTIMEOUT => 6,
-                CURLOPT_USERAGENT      => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SitiWebPA-Monitor/2.0',
+                CURLOPT_USERAGENT      => BOT_USER_AGENT,
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_SSL_VERIFYHOST => 2,
             ]);
@@ -204,7 +204,115 @@ try {
         ];
     }
 
+    /**
+     * Analizza le intestazioni HTTP di sicurezza e restituisce mappa e punteggio
+     *
+     * @param array<string, string> $headers Header normalizzati in lowercase
+     * @return array{hsts: bool, csp: bool, xfo: bool, xxp: bool, rp: bool, score: string}
+     */
+    function checkSecurityHeaders(array $headers): array
+    {
+        $lowerHeaders = array_change_key_case($headers, CASE_LOWER);
+
+        $hsts = isset($lowerHeaders['strict-transport-security']);
+        $csp  = isset($lowerHeaders['content-security-policy']);
+        $xfo  = isset($lowerHeaders['x-frame-options']);
+        $xxp  = isset($lowerHeaders['x-content-type-options']) && str_contains(strtolower($lowerHeaders['x-content-type-options']), 'nosniff');
+        $rp   = isset($lowerHeaders['referrer-policy']);
+
+        $points = ($hsts ? 1 : 0) + ($csp ? 1 : 0) + ($xfo ? 1 : 0) + ($xxp ? 1 : 0) + ($rp ? 1 : 0);
+
+        $grade = match ($points) {
+            5 => 'A+',
+            4 => 'A',
+            3 => 'B',
+            2 => 'C',
+            1 => 'D',
+            default => 'F',
+        };
+
+        return [
+            'hsts'  => $hsts,
+            'csp'   => $csp,
+            'xfo'   => $xfo,
+            'xxp'   => $xxp,
+            'rp'    => $rp,
+            'score' => $grade,
+        ];
+    }
+
+    /**
+     * Verifica la presenza e la configurazione dei record SPF e DMARC
+     *
+     * @param string $domain Dominio dell'ente (es. comune.siena.it)
+     * @return array{spf: ?string, spf_policy: string, dmarc: ?string, dmarc_policy: string}
+     */
+    function checkEmailSecurityRecords(string $domain): array
+    {
+        $spfRaw = null;
+        $spfPolicy = 'none';
+
+        // 1. Controllo SPF sui record TXT del dominio
+        $txtRecords = @dns_get_record($domain, DNS_TXT);
+        if (is_array($txtRecords)) {
+            foreach ($txtRecords as $record) {
+                $txt = $record['txt'] ?? (isset($record['entries']) ? implode('', $record['entries']) : '');
+                if (str_starts_with(trim(strtolower($txt)), 'v=spf1')) {
+                    $spfRaw = trim($txt);
+
+                    // Determina la policy di default finale (-all, ~all, ?all, +all)
+                    if (preg_match('/([~\-?+])all/i', $spfRaw, $m)) {
+                        $spfPolicy = match ($m[1]) {
+                            '-' => 'hardfail (-all)',
+                            '~' => 'softfail (~all)',
+                            '?' => 'neutral (?all)',
+                            '+' => 'pass (+all)',
+                            default => 'unknown'
+                        };
+                    } else {
+                        $spfPolicy = 'missing_all';
+                    }
+                    break;
+                }
+            }
+        }
+
+        $dmarcRaw = null;
+        $dmarcPolicy = 'none';
+
+        // 2. Controllo DMARC interrogando la sottozona standard _dmarc.<dominio>
+        $dmarcDomain = '_dmarc.' . $domain;
+        $dmarcRecords = @dns_get_record($dmarcDomain, DNS_TXT);
+        if (is_array($dmarcRecords)) {
+            foreach ($dmarcRecords as $record) {
+                $txt = $record['txt'] ?? (isset($record['entries']) ? implode('', $record['entries']) : '');
+                if (str_starts_with(trim(strtolower($txt)), 'v=dmarc1')) {
+                    $dmarcRaw = trim($txt);
+
+                    // Estrazione della direttiva p=none|quarantine|reject
+                    if (preg_match('/(?:^|;)\s*p\s*=\s*([^;]+)/i', $dmarcRaw, $matches)) {
+                        $dmarcPolicy = strtolower(trim($matches[1]));
+                    } else {
+                        $dmarcPolicy = 'unspecified';
+                    }
+                    break;
+                }
+            }
+        }
+
+        return [
+            'spf'          => $spfRaw,
+            'spf_policy'   => $spfPolicy,
+            'dmarc'        => $dmarcRaw,
+            'dmarc_policy' => $dmarcPolicy,
+        ];
+    }
+
     $db = Database::getInstance();
+
+    // Contatori per le statistiche giornaliere
+    $totalProcessed = 0;
+    $healthyCount   = 0;
 
     // Fetch 2 least recently checked or random entities
     $sql  = 'SELECT Codice_IPA FROM Enti ORDER BY Data_controllo ASC, RAND() LIMIT 2';
@@ -214,11 +322,14 @@ try {
         $codiceIpa = $row['Codice_IPA'];
         $ente      = new Ente();
 
+        echo "Start analysis of $codiceIpa...\n";
+
         if (!$ente->load($codiceIpa)) {
             echo "[{$codiceIpa}] Valid Ente record not found.\n";
             continue;
         }
 
+        $totalProcessed++;
         $logger?->info("[{$codiceIpa}] Start checking");
 
         // Fetch current stored tags for state change history logging
@@ -259,6 +370,7 @@ try {
             $ente->setTag('validation_error_website', $health['error']);
             $logger?->warning("[{$codiceIpa}] Website Health Check FAILED: {$health['error']}");
         } else {
+            $healthyCount++;
             $ente->setTag('validation_error_website', null);
             $logger?->info("[{$codiceIpa}] Website Health Check PASSED (HTTP {$health['http_code']})");
         }
@@ -320,6 +432,31 @@ try {
             $logger?->error("[{$codiceIpa}] MX lookup error: " . $e->getMessage());
         }
 
+        // --- 3b. EMAIL ANTI-SPOOFING (SPF & DMARC) ---
+        try {
+            $emailSec = checkEmailSecurityRecords($domain);
+
+            // Gestione Tag SPF
+            $oldSpf = $ente->getTag('mail_spf_policy');
+            if ($emailSec['spf_policy'] !== $oldSpf) {
+                logStateChange($db, $codiceIpa, 'spf_policy_change', $oldSpf, $emailSec['spf_policy']);
+            }
+            $ente->setTag('mail_spf', $emailSec['spf'] ? '1' : '0');
+            $ente->setTag('mail_spf_policy', $emailSec['spf_policy']);
+
+            // Gestione Tag DMARC
+            $oldDmarc = $ente->getTag('mail_dmarc_policy');
+            if ($emailSec['dmarc_policy'] !== $oldDmarc) {
+                logStateChange($db, $codiceIpa, 'dmarc_policy_change', $oldDmarc, $emailSec['dmarc_policy']);
+            }
+            $ente->setTag('mail_dmarc', $emailSec['dmarc'] ? '1' : '0');
+            $ente->setTag('mail_dmarc_policy', $emailSec['dmarc_policy']);
+
+            $logger?->info("[{$codiceIpa}] Email Security: SPF={$emailSec['spf_policy']}, DMARC={$emailSec['dmarc_policy']}");
+        } catch (Throwable $e) {
+            $logger?->error("[{$codiceIpa}] SPF/DMARC check error: " . $e->getMessage());
+        }
+
         // --- 4. SUBDOMAIN DISCOVERY (Subfinder) ---
         $command = 'subfinder -d ' . escapeshellarg($domain) . ' -silent';
         $output  = shell_exec($command);
@@ -371,12 +508,12 @@ try {
                     '--no-sandbox ' .
                     '--disable-setuid-sandbox ' .
                     '--disable-dev-shm-usage ' .
-                    '--no-zygote ' .                                   // Bypasses zygote process model
-                    '--renderer-process-limit=1 ' .                   // Restricts Chrome to 1 renderer process (low memory)
+                    '--no-zygote ' .
+                    '--renderer-process-limit=1 ' .
                     '--disable-gpu ' .
                     '--disable-software-rasterizer ' .
                     '--disable-extensions ' .
-                    '--disable-crash-reporter ' .                     // Disables Crashpad cpu scaling errors
+                    '--disable-crash-reporter ' .
                     '--disable-breakpad ' .
                     '--disable-background-networking ' .
                     '--disable-sync ' .
@@ -413,14 +550,19 @@ try {
             $ente->setTag('screenshot', 'none.jpg');
         }
 
-        // --- 6. WHATWEB SCANNER ---
+        // --- 6. WHATWEB SCANNER (CMS, PHP & HTTP HEADERS) ---
         if ($health['healthy']) {
             try {
                 $tmpFile = tempnam(sys_get_temp_dir(), 'whatweb_');
 
+                // Aggiunto HttpHeaders per il rilevamento delle intestazioni di sicurezza
+                $plugins = 'Title,Email,PHP,HTTPServer,WordPress,Joomla,Drupal,TYPO3,Plone,OpenCMS,Liferay,Magento,PrestaShop,HttpHeaders';
+
                 $execCmd = sprintf(
-                    'whatweb %s -p Title,Email --follow-redirect=always --log-json=%s 2>/dev/null',
+                    'timeout 30 whatweb %s -U %s -p %s --follow-redirect=always --log-json=%s 2>/dev/null',
                     escapeshellarg($domain),
+                    escapeshellarg(BOT_USER_AGENT),
+                    escapeshellarg($plugins),
                     escapeshellarg($tmpFile)
                 );
 
@@ -435,19 +577,114 @@ try {
 
                         if (is_array($data) && count($data) > 0) {
                             $site = end($data);
+                            $detectedPlugins = $site['plugins'] ?? [];
 
-                            $pageTitle = $site['plugins']['Title']['string'][0] ?? null;
-                            $pageEmail = $site['plugins']['Email']['string'][0] ?? null;
-
+                            // 1. Titolo della Pagina
+                            $pageTitle = $detectedPlugins['Title']['string'][0] ?? null;
                             if ($pageTitle) {
+                                $oldTitle = $ente->getTag('website_title');
                                 if ($pageTitle !== $oldTitle) {
                                     logStateChange($db, $codiceIpa, 'title_change', $oldTitle, (string)$pageTitle);
                                 }
                                 $ente->setTag('website_title', (string)$pageTitle);
                             }
 
+                            // 2. Email di contatto dal sito
+                            $pageEmail = $detectedPlugins['Email']['string'][0] ?? null;
                             if ($pageEmail) {
                                 $ente->setTag('website_email', (string)$pageEmail);
+                            }
+
+                            // 3. Rilevamento Versione PHP
+                            $phpVersion = null;
+                            if (isset($detectedPlugins['PHP'])) {
+                                $phpVersion = $detectedPlugins['PHP']['version'][0] ?? $detectedPlugins['PHP']['string'][0] ?? 'Detected';
+                            } elseif (isset($detectedPlugins['HTTPServer']['string'])) {
+                                foreach ($detectedPlugins['HTTPServer']['string'] as $serverString) {
+                                    if (preg_match('#PHP/([0-9\.]+)#i', $serverString, $matches)) {
+                                        $phpVersion = $matches[1];
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if ($phpVersion) {
+                                $oldPhp = $ente->getTag('php_version');
+                                if ($phpVersion !== $oldPhp) {
+                                    logStateChange($db, $codiceIpa, 'php_change', $oldPhp, (string)$phpVersion);
+                                }
+                                $ente->setTag('php_version', (string)$phpVersion);
+                            }
+
+                            // 4. Rilevamento CMS
+                            $knownCmsList = [
+                                'WordPress',
+                                'Joomla',
+                                'Drupal',
+                                'TYPO3',
+                                'Plone',
+                                'OpenCMS',
+                                'Liferay',
+                                'Magento',
+                                'PrestaShop'
+                            ];
+
+                            $detectedCms = null;
+                            $detectedCmsVersion = null;
+
+                            foreach ($knownCmsList as $cmsName) {
+                                if (isset($detectedPlugins[$cmsName])) {
+                                    $detectedCms = $cmsName;
+                                    $detectedCmsVersion = $detectedPlugins[$cmsName]['version'][0] ?? null;
+                                    break;
+                                }
+                            }
+
+                            if ($detectedCms) {
+                                $oldCms = $ente->getTag('cms');
+                                $fullCmsString = $detectedCms . ($detectedCmsVersion ? ' ' . $detectedCmsVersion : '');
+
+                                if ($fullCmsString !== $oldCms) {
+                                    logStateChange($db, $codiceIpa, 'cms_change', $oldCms, $fullCmsString);
+                                }
+
+                                $ente->setTag('cms', $detectedCms);
+                                if ($detectedCmsVersion) {
+                                    $ente->setTag('cms_version', (string)$detectedCmsVersion);
+                                }
+                            }
+
+                            // 5. Analisi Header di Sicurezza (HttpHeaders Plugin)
+                            $rawHeaders = $detectedPlugins['HttpHeaders']['string'] ?? [];
+                            $parsedHeaders = [];
+
+                            foreach ($rawHeaders as $headerLine) {
+                                if (str_contains($headerLine, ':')) {
+                                    [$hKey, $hVal] = explode(':', $headerLine, 2);
+                                    $parsedHeaders[trim($hKey)] = trim($hVal);
+                                }
+                            }
+
+                            if (empty($parsedHeaders) && !empty($site['http_headers'])) {
+                                foreach ($site['http_headers'] as $k => $v) {
+                                    $parsedHeaders[(string)$k] = is_array($v) ? implode(', ', $v) : (string)$v;
+                                }
+                            }
+
+                            if (!empty($parsedHeaders)) {
+                                $sec = checkSecurityHeaders($parsedHeaders);
+
+                                $ente->setTag('sec_hsts', $sec['hsts'] ? '1' : '0');
+                                $ente->setTag('sec_csp', $sec['csp'] ? '1' : '0');
+                                $ente->setTag('sec_xfo', $sec['xfo'] ? '1' : '0');
+                                $ente->setTag('sec_xxp', $sec['xxp'] ? '1' : '0');
+                                $ente->setTag('sec_rp', $sec['rp'] ? '1' : '0');
+
+                                $oldScore = $ente->getTag('security_score');
+                                if ($oldScore !== $sec['score']) {
+                                    logStateChange($db, $codiceIpa, 'security_grade_change', $oldScore, $sec['score']);
+                                }
+                                $ente->setTag('security_score', $sec['score']);
                             }
                         }
                     }
@@ -466,6 +703,28 @@ try {
             'domain'     => $domain,
         ]);
     }
+
+    // --- 7. AGGIORNAMENTO STATISTICHE GIORNALIERE ---
+    if ($totalProcessed > 0) {
+        $errorCount = $totalProcessed - $healthyCount;
+
+        $sqlStat = 'INSERT INTO Daily_Stats (stat_date, scanned_count, healthy_count, error_count)
+                    VALUES (CURDATE(), :scanned, :healthy, :errors)
+                    ON DUPLICATE KEY UPDATE
+                        scanned_count = scanned_count + VALUES(scanned_count),
+                        healthy_count = healthy_count + VALUES(healthy_count),
+                        error_count   = error_count + VALUES(error_count)';
+
+        $sthStat = $db->prepare($sqlStat);
+        $sthStat->execute([
+            'scanned' => $totalProcessed,
+            'healthy' => $healthyCount,
+            'errors'  => $errorCount,
+        ]);
+
+        $logger?->info("Daily stats updated: scanned={$totalProcessed}, healthy={$healthyCount}, errors={$errorCount}");
+    }
+
 } finally {
     FileLocker::unlockFile($lockFile);
 }

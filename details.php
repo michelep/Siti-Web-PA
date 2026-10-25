@@ -93,14 +93,29 @@ if ($sitoRaw !== '') {
                 <strong>Codice IPA:</strong> <?= htmlspecialchars($codiceIpa, ENT_QUOTES, 'UTF-8') ?>
             </p>
         </div>
-        <div>
+        <!-- BADGE STATO E DATA ULTIMO CONTROLLO -->
+        <div class="text-end">
             <?php if ($validationError): ?>
-                <span class="badge bg-danger fs-6 px-3 py-2"><i class="bi bi-exclamation-triangle-fill me-1"></i> Anomalia Rilevata</span>
+                <span class="badge bg-danger fs-6 px-3 py-2 d-inline-block mb-1">
+                    <i class="bi bi-exclamation-triangle-fill me-1"></i> Anomalia Rilevata
+                </span>
             <?php else: ?>
-                <span class="badge bg-success fs-6 px-3 py-2"><i class="bi bi-check-circle-fill me-1"></i> Stato Regolare</span>
+                <span class="badge bg-success fs-6 px-3 py-2 d-inline-block mb-1">
+                    <i class="bi bi-check-circle-fill me-1"></i> Stato Regolare
+                </span>
             <?php endif; ?>
+
+            <div class="text-muted small">
+                <i class="bi bi-clock-history me-1"></i> Ultima verifica:
+                <strong>
+                    <?= ($ente->dataControllo instanceof DateTimeInterface)
+                        ? $ente->dataControllo->format('d/m/Y H:i')
+                        : '&mdash; Mai verificato' ?>
+                </strong>
+            </div>
         </div>
     </div>
+
 
     <div class="row g-4">
         <!-- SCHEDA SITO WEB & MONITORING -->
@@ -134,6 +149,65 @@ if ($sitoRaw !== '') {
                             <th scope="row" class="text-muted ps-0">Server Email (MX):</th>
                             <td class="pe-0"><span class="badge bg-info text-dark"><?= htmlspecialchars($mxTag ?: 'N/D', ENT_QUOTES, 'UTF-8') ?></span></td>
                         </tr>
+                        <?php
+                        $hasSpf      = $ente->getTag('mail_spf') === '1';
+                        $spfPolicy   = $ente->getTag('mail_spf_policy') ?: 'Assente';
+                        $hasDmarc    = $ente->getTag('mail_dmarc') === '1';
+                        $dmarcPolicy = $ente->getTag('mail_dmarc_policy') ?: 'none';
+
+                        $dmarcBadgeClass = match ($dmarcPolicy) {
+                            'reject'     => 'bg-success',
+                            'quarantine' => 'bg-warning text-dark',
+                            'none'       => 'bg-danger',
+                            default      => 'bg-secondary'
+                        };
+                        ?>
+                        <tr>
+                            <th scope="row" class="text-muted ps-0">Protezione SPF:</th>
+                            <td class="pe-0">
+                                <?php if ($hasSpf): ?>
+                                    <span class="badge bg-success"><i class="bi bi-shield-check me-1"></i>Presente</span>
+                                    <span class="badge bg-secondary ms-1"><?= htmlspecialchars($spfPolicy, ENT_QUOTES, 'UTF-8') ?></span>
+                                <?php else: ?>
+                                    <span class="badge bg-danger"><i class="bi bi-shield-x me-1"></i>Non configurato</span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row" class="text-muted ps-0">Policy DMARC:</th>
+                            <td class="pe-0">
+                                <?php if ($hasDmarc): ?>
+                                    <span class="badge <?= $dmarcBadgeClass ?>"><i class="bi bi-shield-check me-1"></i><?= htmlspecialchars(strtoupper($dmarcPolicy), ENT_QUOTES, 'UTF-8') ?></span>
+                                <?php else: ?>
+                                    <span class="badge bg-danger"><i class="bi bi-shield-x me-1"></i>Assente</span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row" class="text-muted ps-0">CMS Rilevato:</th>
+                            <td class="pe-0">
+                                <?php
+                                $cms = $ente->getTag('cms');
+                                $cmsVer = $ente->getTag('cms_version');
+                                ?>
+                                <?php if ($cms): ?>
+                                    <span class="badge bg-primary"><?= htmlspecialchars($cms . ($cmsVer ? ' v' . $cmsVer : ''), ENT_QUOTES, 'UTF-8') ?></span>
+                                <?php else: ?>
+                                    <span class="text-muted">&mdash; Non identificato</span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row" class="text-muted ps-0">Versione PHP:</th>
+                            <td class="pe-0">
+                                <?php $phpVer = $ente->getTag('php_version'); ?>
+                                <?php if ($phpVer): ?>
+                                    <span class="badge bg-secondary"><?= htmlspecialchars($phpVer, ENT_QUOTES, 'UTF-8') ?></span>
+                                <?php else: ?>
+                                    <span class="text-muted">&mdash; Nascosta / Non rilevata</span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
                         <tr>
                             <th scope="row" class="text-muted ps-0">Stato Controllo:</th>
                             <td class="pe-0">
@@ -143,10 +217,6 @@ if ($sitoRaw !== '') {
                                     <span class="text-success fw-semibold"><i class="bi bi-check2-circle me-1"></i>Nessun errore di risoluzione</span>
                                 <?php endif; ?>
                             </td>
-                        </tr>
-                        <tr>
-                            <th scope="row" class="text-muted ps-0">Ultimo Check:</th>
-                            <td class="pe-0 text-muted"><?= $lastCheckDate ?></td>
                         </tr>
                     </tbody>
                 </table>
@@ -166,6 +236,64 @@ if ($sitoRaw !== '') {
                             <span>Nessuno screenshot disponibile</span>
                         </div>
                     <?php endif; ?>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sezione analisi misicure di sicurezza -->
+    <?php
+    $secScore = $ente->getTag('security_score') ?: 'F';
+    $hsts     = $ente->getTag('sec_hsts') === '1';
+    $csp      = $ente->getTag('sec_csp') === '1';
+    $xfo      = $ente->getTag('sec_xfo') === '1';
+    $xxp      = $ente->getTag('sec_xxp') === '1';
+    $rp       = $ente->getTag('sec_rp') === '1';
+
+    $gradeBadge = match ($secScore) {
+        'A+', 'A' => 'bg-success',
+        'B', 'C'  => 'bg-warning text-dark',
+        default   => 'bg-danger'
+    };
+    ?>
+
+    <div class="card border-0 shadow-sm p-4 mt-4">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h3 class="h5 fw-bold mb-0">
+                <i class="bi bi-shield-lock me-2 text-primary"></i>Intestazioni di Sicurezza HTTP
+            </h3>
+            <span class="badge <?= $gradeBadge ?> fs-6 px-3 py-2">Grado: <?= htmlspecialchars($secScore, ENT_QUOTES, 'UTF-8') ?></span>
+        </div>
+
+        <div class="row g-2">
+            <div class="col-6 col-md-4">
+                <div class="p-2 border rounded bg-light d-flex justify-content-between align-items-center">
+                    <span class="small fw-semibold">HSTS</span>
+                    <?= $hsts ? '<span class="badge bg-success"><i class="bi bi-check-lg"></i> Attivo</span>' : '<span class="badge bg-secondary">Assente</span>' ?>
+                </div>
+            </div>
+            <div class="col-6 col-md-4">
+                <div class="p-2 border rounded bg-light d-flex justify-content-between align-items-center">
+                    <span class="small fw-semibold">CSP</span>
+                    <?= $csp ? '<span class="badge bg-success"><i class="bi bi-check-lg"></i> Attivo</span>' : '<span class="badge bg-secondary">Assente</span>' ?>
+                </div>
+            </div>
+            <div class="col-6 col-md-4">
+                <div class="p-2 border rounded bg-light d-flex justify-content-between align-items-center">
+                    <span class="small fw-semibold">X-Frame-Options</span>
+                    <?= $xfo ? '<span class="badge bg-success"><i class="bi bi-check-lg"></i> Attivo</span>' : '<span class="badge bg-secondary">Assente</span>' ?>
+                </div>
+            </div>
+            <div class="col-6 col-md-4">
+                <div class="p-2 border rounded bg-light d-flex justify-content-between align-items-center">
+                    <span class="small fw-semibold">X-Content-Type</span>
+                    <?= $xxp ? '<span class="badge bg-success"><i class="bi bi-check-lg"></i> Attivo</span>' : '<span class="badge bg-secondary">Assente</span>' ?>
+                </div>
+            </div>
+            <div class="col-6 col-md-4">
+                <div class="p-2 border rounded bg-light d-flex justify-content-between align-items-center">
+                    <span class="small fw-semibold">Referrer-Policy</span>
+                    <?= $rp ? '<span class="badge bg-success"><i class="bi bi-check-lg"></i> Attivo</span>' : '<span class="badge bg-secondary">Assente</span>' ?>
                 </div>
             </div>
         </div>
