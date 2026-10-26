@@ -314,8 +314,8 @@ try {
     $totalProcessed = 0;
     $healthyCount   = 0;
 
-    // Fetch 2 least recently checked or random entities
-    $sql  = 'SELECT Codice_IPA FROM Enti ORDER BY Data_controllo ASC, RAND() LIMIT 2';
+    // Fetch 10 least recently checked or random entities
+    $sql  = 'SELECT Codice_IPA FROM Enti ORDER BY Data_controllo ASC, RAND() LIMIT 10';
     $stmt = $db->query($sql);
 
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {

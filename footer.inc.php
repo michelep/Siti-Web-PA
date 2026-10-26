@@ -1,8 +1,13 @@
-<footer class="footer mt-auto py-3 bg-body-tertiary">
-        <div class="container text-center text-md-start">
-            <span class="text-body-secondary">
+    <footer class="footer mt-auto py-3 bg-body-tertiary">
+        <div class="container d-flex flex-column flex-md-row align-items-center justify-content-between text-center text-md-start gap-2">
+            <span class="text-body-secondary small">
                 Built with <i class="bi bi-heart-fill text-danger" aria-label="love"></i> in Siena, Italy
             </span>
+            <div class="small">
+                <a href="/privacy" class="text-body-secondary text-decoration-none hover-underline">
+                    <i class="bi bi-shield-lock me-1"></i>Privacy Policy
+                </a>
+            </div>
         </div>
     </footer>
 

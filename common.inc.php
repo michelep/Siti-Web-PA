@@ -344,3 +344,184 @@ class FileLocker
         return false;
     }
 }
+
+/***
+ *
+ *  FUNZIONI DI HELPER
+ *
+ */
+
+/**
+ * Valuta dinamicamente se una versione rilevata è supportata o deprecata/EOL
+ *
+ * @param PDO $db Istanza del database
+ * @param string $tech 'php', 'wordpress', 'drupal', 'joomla'
+ * @param string|null $version Versione rilevata (es. '8.1.2', '6.4.3')
+ * @return array{status: string, label: string, badge_class: string, icon: string, latest_in_cycle: ?string}
+ */
+function evaluateSoftwareVersionDynamic(PDO $db, string $tech, ?string $version): array
+{
+    if (!$version || $version === 'Detected') {
+        return [
+            'status'          => 'unknown',
+            'label'           => 'Non determinata',
+            'badge_class'     => 'bg-secondary',
+            'icon'            => 'bi-question-circle',
+            'latest_in_cycle' => null
+        ];
+    }
+
+    $tech = strtolower(trim($tech));
+
+    // Carica tutti i cicli noti per questo prodotto
+    static $lifecycleCache = [];
+    if (!isset($lifecycleCache[$tech])) {
+        $stmt = $db->prepare('SELECT cycle, latest_version, eol_date, is_supported FROM Software_Lifecycle WHERE product = :product');
+        $stmt->execute(['product' => $tech]);
+        $lifecycleCache[$tech] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    $productCycles = $lifecycleCache[$tech];
+    if (empty($productCycles)) {
+        // Fallback generico se la tabella non è ancora popolata
+        return [
+            'status'          => 'info',
+            'label'           => 'Rilevato',
+            'badge_class'     => 'bg-info text-dark',
+            'icon'            => 'bi-info-circle',
+            'latest_in_cycle' => null
+        ];
+    }
+
+    // Trova il ciclo a cui appartiene la versione (es: 8.1.12 appartiene al ciclo '8.1')
+    $matchedCycle = null;
+    foreach ($productCycles as $c) {
+        $cyclePrefix = $c['cycle'];
+        if (str_starts_with($version, $cyclePrefix . '.') || $version === $cyclePrefix) {
+            $matchedCycle = $c;
+            break;
+        }
+    }
+
+    // Se il ramo è più vecchio di qualsiasi ciclo attivo censito
+    if (!$matchedCycle) {
+        return [
+            'status'          => 'eol',
+            'label'           => 'Obsoleta / EOL',
+            'badge_class'     => 'bg-danger',
+            'icon'            => 'bi-exclamation-octagon-fill',
+            'latest_in_cycle' => null
+        ];
+    }
+
+    // Se il ramo è in End-of-Life
+    if ((int)$matchedCycle['is_supported'] === 0) {
+        $eolLabel = $matchedCycle['eol_date'] ? 'EOL dal ' . date('m/Y', strtotime($matchedCycle['eol_date'])) : 'Non supportata';
+        return [
+            'status'          => 'eol',
+            'label'           => 'Obsoleta (' . $eolLabel . ')',
+            'badge_class'     => 'bg-danger',
+            'icon'            => 'bi-exclamation-triangle-fill',
+            'latest_in_cycle' => $matchedCycle['latest_version']
+        ];
+    }
+
+    // Se il ramo è supportato, controlla se è disponibile una minor release più recente
+    $isLatestInBranch = version_compare($version, $matchedCycle['latest_version'], '>=');
+
+    if ($isLatestInBranch) {
+        return [
+            'status'          => 'supported',
+            'label'           => 'Supportata e aggiornata',
+            'badge_class'     => 'bg-success',
+            'icon'            => 'bi-check-circle-fill',
+            'latest_in_cycle' => $matchedCycle['latest_version']
+        ];
+    }
+
+    return [
+        'status'          => 'update_available',
+        'label'           => 'Supportata (Aggiornamento disp. ' . $matchedCycle['latest_version'] . ')',
+        'badge_class'     => 'bg-warning text-dark',
+        'icon'            => 'bi-arrow-up-circle-fill',
+        'latest_in_cycle' => $matchedCycle['latest_version']
+    ];
+}
+
+/**
+ * Valuta se la configurazione SPF è adeguata contro lo spoofing
+ */
+function evaluateSpfAdequacy(bool $hasSpf, string $policy): array
+{
+    if (!$hasSpf) {
+        return [
+            'adequate'    => false,
+            'label'       => 'Non configurato (Vulnerabile)',
+            'badge_class' => 'bg-danger',
+            'icon'        => 'bi-x-octagon-fill',
+        ];
+    }
+
+    // Hardfail (-all) o Softfail (~all) con record presente
+    if (str_contains($policy, '-all') || str_contains($policy, '~all')) {
+        $isHard = str_contains($policy, '-all');
+        return [
+            'adequate'    => true,
+            'label'       => $isHard ? 'Ottimale (-all)' : 'Accettabile (~all)',
+            'badge_class' => $isHard ? 'bg-success' : 'bg-success-subtle text-success-emphasis border border-success',
+            'icon'        => 'bi-shield-check',
+        ];
+    }
+
+    // Se usa +all o ?all non offre alcuna protezione effettiva
+    return [
+        'adequate'    => false,
+        'label'       => 'Inadeguato (' . $policy . ')',
+        'badge_class' => 'bg-warning text-dark',
+        'icon'        => 'bi-shield-exclamation',
+    ];
+}
+
+/**
+ * Valuta se la policy DMARC protegge attivamente il dominio
+ */
+function evaluateDmarcAdequacy(bool $hasDmarc, string $policy): array
+{
+    if (!$hasDmarc) {
+        return [
+            'adequate'    => false,
+            'label'       => 'Assente (Nessuna protezione)',
+            'badge_class' => 'bg-danger',
+            'icon'        => 'bi-x-octagon-fill',
+        ];
+    }
+
+    $policy = strtolower(trim($policy));
+
+    return match ($policy) {
+        'reject' => [
+            'adequate'    => true,
+            'label'       => 'Ottimale (p=reject)',
+            'badge_class' => 'bg-success',
+            'icon'        => 'bi-shield-lock-fill',
+        ],
+        'quarantine' => [
+            'adequate'    => true,
+            'label'       => 'Valido (p=quarantine)',
+            'badge_class' => 'bg-info text-dark',
+            'icon'        => 'bi-shield-shaded',
+        ],
+        'none' => [
+            'adequate'    => false,
+            'label'       => 'Solo Monitoraggio (p=none)',
+            'badge_class' => 'bg-warning text-dark',
+            'icon'        => 'bi-shield-slash',
+        ],
+        default => [
+            'adequate'    => false,
+            'label'       => 'Non valida / Incompleta',
+            'badge_class' => 'bg-secondary',
+            'icon'        => 'bi-question-circle',
+        ]
+    };
+}

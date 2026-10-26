@@ -193,8 +193,7 @@ try {
 
             $sql = "SELECT Codice_IPA, Denominazione_ente, Tipologia, Sito_istituzionale, latitude, longitude
                     FROM Enti
-                    WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-                    LIMIT 5000";
+                    WHERE latitude IS NOT NULL AND longitude IS NOT NULL";
 
             $stmt = $db->query($sql);
             $features = [];
