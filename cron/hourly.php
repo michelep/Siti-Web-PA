@@ -315,17 +315,21 @@ try {
     $healthyCount   = 0;
 
     // Fetch 10 least recently checked or random entities
-    $sql  = 'SELECT Codice_IPA FROM Enti ORDER BY Data_controllo ASC, RAND() LIMIT 10';
+    $sql = "SELECT Codice_IPA
+            FROM Enti
+            WHERE LENGTH(Sito_istituzionale) > 1
+              AND (Data_controllo IS NULL OR Data_controllo < NOW() - INTERVAL 7 DAY)
+            ORDER BY (Data_controllo IS NOT NULL) ASC, Data_controllo ASC
+            LIMIT 10";
+
     $stmt = $db->query($sql);
 
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $codiceIpa = $row['Codice_IPA'];
         $ente      = new Ente();
 
-        echo "Start analysis of $codiceIpa...\n";
-
         if (!$ente->load($codiceIpa)) {
-            echo "[{$codiceIpa}] Valid Ente record not found.\n";
+            echo "[{$codiceIpa}] Ente record not found.\n";
             continue;
         }
 
@@ -342,11 +346,20 @@ try {
         if (!$domain) {
             $logger?->error("[{$codiceIpa}] Invalid or missing URL");
             $newError = 'Sito web assente o URL non valido';
+            echo "[{$codiceIpa}] have no website\n";
 
             if ($oldError !== $newError) {
                 logStateChange($db, $codiceIpa, 'status_change', $oldError ?? 'Sito Online', $newError);
             }
             $ente->setTag('validation_error_website', $newError);
+
+            // Always update Ente check date to mark it as inspected
+            $sqlUpdate = 'UPDATE Enti SET Data_controllo = NOW() WHERE Codice_IPA = :codice_ipa';
+            $sthUpdate = $db->prepare($sqlUpdate);
+            $sthUpdate->execute([
+                'codice_ipa' => $codiceIpa,
+            ]);
+
             continue;
         }
 

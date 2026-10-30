@@ -115,6 +115,46 @@ require_once __DIR__ . '/header.inc.php';
             </div>
         </div>
 
+        <div class="row g-4 mt-2">
+            <div class="row g-4 mt-2 mb-4">
+                <!-- GRAFICO 1: Top 5 CMS -->
+                <div class="col-lg-4 col-md-6">
+                    <div class="card border-0 shadow-sm p-4 h-100 text-center">
+                        <h3 class="h6 fw-bold mb-3 text-start">
+                            <i class="bi bi-window-stack text-primary me-2"></i>Diffusione CMS (Top 5)
+                        </h3>
+                        <div style="position: relative; height: 260px;">
+                            <canvas id="chart-cms"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GRAFICO 2: Versioni PHP -->
+                <div class="col-lg-4 col-md-6">
+                    <div class="card border-0 shadow-sm p-4 h-100 text-center">
+                        <h3 class="h6 fw-bold mb-3 text-start">
+                            <i class="bi bi-cpu text-info me-2"></i>Versioni PHP Rilevate
+                        </h3>
+                        <div style="position: relative; height: 260px;">
+                            <canvas id="chart-php"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GRAFICO 3: Protezione Email (SPF vs DKIM) -->
+                <div class="col-lg-4 col-md-12">
+                    <div class="card border-0 shadow-sm p-4 h-100 text-center">
+                        <h3 class="h6 fw-bold mb-3 text-start">
+                            <i class="bi bi-shield-check text-success me-2"></i>Adozione SPF &amp; DKIM
+                        </h3>
+                        <div style="position: relative; height: 260px;">
+                            <canvas id="chart-email-security"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- RECENT ENTI CARDS SECTION -->
         <div class="mb-5">
             <div class="d-flex justify-content-between align-items-center mb-3">

@@ -43,12 +43,68 @@ try {
                            LIMIT 5";
             $topMail = $db->query($sqlTopMail)->fetchAll(PDO::FETCH_ASSOC);
 
+            // 4. Top 5 CMS (+ Altri)
+            $sqlTopCms = "SELECT tagValue AS cms, COUNT(*) as total
+                          FROM Tags
+                          WHERE tagName = 'cms' AND tagValue IS NOT NULL AND tagValue != ''
+                          GROUP BY tagValue
+                          ORDER BY total DESC
+                          LIMIT 5";
+            $topCms = $db->query($sqlTopCms)->fetchAll(PDO::FETCH_ASSOC);
+
+            $totalCmsSum = 0;
+            foreach ($topCms as $item) {
+                $totalCmsSum += (int)$item['total'];
+            }
+
+            $allCmsCount = (int)$db->query("SELECT COUNT(*) FROM Tags WHERE tagName = 'cms' AND tagValue IS NOT NULL AND tagValue != ''")->fetchColumn();
+            $otherCms = max(0, $allCmsCount - $totalCmsSum);
+            if ($otherCms > 0) {
+                $topCms[] = [
+                    'cms'   => 'Altri',
+                    'total' => (string)$otherCms
+                ];
+            }
+
+            // 5. Versioni PHP (Rami principali X.Y)
+            $sqlTopPhp = "SELECT SUBSTRING_INDEX(tagValue, '.', 2) AS version, COUNT(*) as total
+                          FROM Tags
+                          WHERE tagName = 'php_version'
+                            AND tagValue IS NOT NULL
+                            AND tagValue NOT IN ('', 'Detected')
+                          GROUP BY version
+                          ORDER BY total DESC
+                          LIMIT 5";
+            $topPhp = $db->query($sqlTopPhp)->fetchAll(PDO::FETCH_ASSOC);
+
+            // 6. Statistiche Sicurezza Posta Elettronica (SPF & DKIM)
+            $spfPresent  = (int)$db->query("SELECT COUNT(*) FROM Tags WHERE tagName = 'mail_spf' AND tagValue = '1'")->fetchColumn();
+            $dkimPresent = (int)$db->query("SELECT COUNT(*) FROM Tags WHERE tagName = 'mail_dkim' AND tagValue = '1'")->fetchColumn();
+
+            // Base di calcolo: totale enti con record SPF censito (o totale con sito/posta verificata)
+            $totalMailAudited = (int)$db->query("SELECT COUNT(*) FROM Tags WHERE tagName = 'mail_spf'")->fetchColumn();
+            if ($totalMailAudited === 0) {
+                $totalMailAudited = $entiSitiWeb;
+            }
+
+            $spfMissing  = max(0, $totalMailAudited - $spfPresent);
+            $dkimMissing = max(0, $totalMailAudited - $dkimPresent);
+
+            header('Content-Type: application/json; charset=utf-8');
             echo json_encode([
-                'enti_totali'   => $entiTotali,
-                'enti_siti_web' => $entiSitiWeb,
-                'enti_errori'   => $entiErrori,
-                'top_hosting'   => $topHosting,
-                'top_mail'      => $topMail,
+                'enti_totali'    => $entiTotali,
+                'enti_siti_web'  => $entiSitiWeb,
+                'enti_errori'    => $entiErrori,
+                'top_hosting'    => $topHosting,
+                'top_mail'       => $topMail,
+                'top_cms'        => $topCms,
+                'top_php'        => $topPhp,
+                'email_security' => [
+                    'spf_present'  => $spfPresent,
+                    'spf_missing'  => $spfMissing,
+                    'dkim_present' => $dkimPresent,
+                    'dkim_missing' => $dkimMissing
+                ]
             ]);
             exit;
 

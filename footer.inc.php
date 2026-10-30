@@ -16,7 +16,6 @@
     <script src="/js/bootstrap.bundle.min.js" defer></script>
     <script src="/js/bootstrap-table.min.js" defer></script>
     <script src="/js/chart.js" defer></script>
-    <script src="/js/common.js" defer></script>
 <?php
 $currentPageScript = pathinfo(basename($_SERVER['SCRIPT_NAME']), PATHINFO_FILENAME);
 
