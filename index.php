@@ -38,7 +38,7 @@ require_once __DIR__ . '/header.inc.php';
             </div>
             <div class="mt-3 mt-md-0">
                 <span class="badge bg-white text-dark border px-3 py-2 rounded-pill shadow-sm">
-                    <i class="bi bi-clock-history me-1 text-primary"></i> Aggiornamento orario
+                    <i class="bi bi-clock-history me-1 text-primary"></i> Aggiornamento in tempo reale
                 </span>
             </div>
         </div>
@@ -172,7 +172,7 @@ require_once __DIR__ . '/header.inc.php';
                 <div class="col-lg-4 col-md-12">
                     <div class="card border-0 shadow-sm p-4 h-100 text-center">
                         <h3 class="h6 fw-bold mb-3 text-start">
-                            <i class="bi bi-shield-check text-success me-2"></i>Adozione SPF &amp; DKIM
+                            <i class="bi bi-shield-check text-success me-2"></i>Adozione SPF &amp; DMARC
                         </h3>
                         <div style="position: relative; height: 260px;">
                             <canvas id="chart-email-security"></canvas>

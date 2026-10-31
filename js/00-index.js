@@ -126,15 +126,15 @@ document.addEventListener('DOMContentLoaded', function () {
                         labels: [
                             'SPF Configurato',
                             'SPF Assente / Non Valido',
-                            'DKIM Rilevato',
-                            'DKIM Non Rilevato'
+                            'DMARC Rilevato',
+                            'DMARC Non Rilevato'
                         ],
                         datasets: [{
                             data: [
                                 parseInt(sec.spf_present || 0, 10),
                                 parseInt(sec.spf_missing || 0, 10),
-                                parseInt(sec.dkim_present || 0, 10),
-                                parseInt(sec.dkim_missing || 0, 10)
+                                parseInt(sec.dmarc_present || 0, 10),
+                                parseInt(sec.dmarc_missing || 0, 10)
                             ],
                             backgroundColor: ['#198754', '#ffc107', '#0d6efd', '#dc3545'],
                             borderWidth: 1

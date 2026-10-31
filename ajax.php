@@ -94,7 +94,7 @@ try {
 
             // 6. Statistiche Sicurezza Posta Elettronica (SPF & DKIM)
             $spfPresent  = (int)$db->query("SELECT COUNT(*) FROM Tags WHERE tagName = 'mail_spf' AND tagValue = '1'")->fetchColumn();
-            $dkimPresent = (int)$db->query("SELECT COUNT(*) FROM Tags WHERE tagName = 'mail_dkim' AND tagValue = '1'")->fetchColumn();
+            $dmarcPresent = (int)$db->query("SELECT COUNT(*) FROM Tags WHERE tagName = 'mail_dmarc' AND tagValue = '1'")->fetchColumn();
 
             // Base di calcolo: totale enti con record SPF censito (o totale con sito/posta verificata)
             $totalMailAudited = (int)$db->query("SELECT COUNT(*) FROM Tags WHERE tagName = 'mail_spf'")->fetchColumn();
@@ -103,7 +103,7 @@ try {
             }
 
             $spfMissing  = max(0, $totalMailAudited - $spfPresent);
-            $dkimMissing = max(0, $totalMailAudited - $dkimPresent);
+            $dmarcMissing = max(0, $totalMailAudited - $dmarcPresent);
 
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode([
@@ -119,8 +119,8 @@ try {
                 'email_security' => [
                     'spf_present'  => $spfPresent,
                     'spf_missing'  => $spfMissing,
-                    'dkim_present' => $dkimPresent,
-                    'dkim_missing' => $dkimMissing
+                    'dmarc_present' => $dmarcPresent,
+                    'dmarc_missing' => $dmarcMissing
                 ]
             ]);
             exit;
