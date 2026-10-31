@@ -45,7 +45,8 @@ require_once __DIR__ . '/header.inc.php';
 
         <!-- METRIC SUMMARY CARDS -->
         <div class="row g-3 mb-4">
-            <div class="col-md-4">
+            <!-- 1. Totale Enti IPA -->
+            <div class="col-xl-3 col-md-6">
                 <div class="card card-stat p-3 h-100 border-0 shadow-sm">
                     <div class="d-flex align-items-center">
                         <div class="icon-shape bg-primary bg-opacity-10 text-primary me-3">
@@ -59,7 +60,8 @@ require_once __DIR__ . '/header.inc.php';
                 </div>
             </div>
 
-            <div class="col-md-4">
+            <!-- 2. Siti Istituzionali -->
+            <div class="col-xl-3 col-md-6">
                 <div class="card card-stat p-3 h-100 border-0 shadow-sm">
                     <div class="d-flex align-items-center">
                         <div class="icon-shape bg-success bg-opacity-10 text-success me-3">
@@ -73,7 +75,8 @@ require_once __DIR__ . '/header.inc.php';
                 </div>
             </div>
 
-            <div class="col-md-4">
+            <!-- 3. Anomalie Dati -->
+            <div class="col-xl-3 col-md-6">
                 <div class="card card-stat p-3 h-100 border-0 shadow-sm">
                     <div class="d-flex align-items-center">
                         <div class="icon-shape bg-danger bg-opacity-10 text-danger me-3">
@@ -82,6 +85,30 @@ require_once __DIR__ . '/header.inc.php';
                         <div>
                             <span class="text-uppercase text-muted fw-medium small">Anomalie Dati</span>
                             <h3 class="fw-bold fs-2 mb-0 mt-1 text-dark" id="stat-errori">&mdash;</h3>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 4. Stato Scansioni (24h vs >72h) -->
+            <div class="col-xl-3 col-md-6">
+                <div class="card card-stat p-3 h-100 border-0 shadow-sm">
+                    <div class="d-flex align-items-center">
+                        <div class="icon-shape bg-info bg-opacity-10 text-info me-3">
+                            <i class="bi bi-activity fs-4"></i>
+                        </div>
+                        <div class="w-100">
+                            <span class="text-uppercase text-muted fw-medium small">Attività Scansione</span>
+                            <div class="d-flex align-items-baseline justify-content-between mt-1">
+                                <div>
+                                    <h3 class="fw-bold fs-2 mb-0 text-success d-inline" id="stat-aggiornati-24h">&mdash;</h3>
+                                    <span class="text-muted small ms-1">&le; 24h</span>
+                                </div>
+                                <div class="text-end">
+                                    <span class="fw-bold fs-5 text-warning" id="stat-stale-72h">&mdash;</span>
+                                    <span class="text-muted small ms-1">&gt; 72h</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

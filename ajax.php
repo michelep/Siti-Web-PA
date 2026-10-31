@@ -25,6 +25,21 @@ try {
             $entiSitiWeb  = (int)$db->query("SELECT COUNT(*) FROM Enti WHERE LENGTH(Sito_istituzionale) > 1")->fetchColumn();
             $entiErrori   = (int)$db->query("SELECT COUNT(DISTINCT Codice_IPA) FROM Tags WHERE tagName IN ('validation_error_website', 'validation_error_email')")->fetchColumn();
 
+            // Enti controllati nelle ultime 24 ore
+            $enti24h = (int)$db->query("
+                SELECT COUNT(*)
+                FROM Enti
+                WHERE Data_controllo >= NOW() - INTERVAL 24 HOUR
+            ")->fetchColumn();
+
+            // Enti con sito web non controllati da più di 72 ore (o mai controllati)
+            $entiStale72h = (int)$db->query("
+                SELECT COUNT(*)
+                FROM Enti
+                WHERE LENGTH(Sito_istituzionale) > 1
+                  AND (Data_controllo < NOW() - INTERVAL 72 HOUR OR Data_controllo IS NULL)
+            ")->fetchColumn();
+
             // 2. Top 5 Hosting Providers
             $sqlTopHosting = "SELECT tagValue AS provider, COUNT(*) as total
                               FROM Tags
@@ -95,6 +110,8 @@ try {
                 'enti_totali'    => $entiTotali,
                 'enti_siti_web'  => $entiSitiWeb,
                 'enti_errori'    => $entiErrori,
+                'enti_24h'          => $enti24h,
+                'enti_stale_72h'    => $entiStale72h,
                 'top_hosting'    => $topHosting,
                 'top_mail'       => $topMail,
                 'top_cms'        => $topCms,

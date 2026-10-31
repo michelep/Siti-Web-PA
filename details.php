@@ -63,6 +63,9 @@ $cms        = $ente->getTag('cms');
 $cmsVersion = $ente->getTag('cms_version');
 $phpVersion = $ente->getTag('php_version');
 
+$webServer = $ente->getTag('web_server');
+$webServerVersion = $ente->getTag('web_server_version');
+
 $cmsEval = $cms ? evaluateSoftwareVersionDynamic($db, $cms, $cmsVersion) : null;
 $phpEval = evaluateSoftwareVersionDynamic($db, 'php', $phpVersion);
 
@@ -272,6 +275,27 @@ require_once __DIR__ . '/header.inc.php';
                                 <span class="badge bg-secondary"><i class="bi bi-info-circle me-1"></i>PHP Rilevato (versione non esposta)</span>
                             <?php else: ?>
                                 <span class="text-muted">&mdash; Nascosta o non rilevata</span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row" class="text-muted ps-0">Web Server:</th>
+                        <td class="pe-0">
+                            <?php if ($webServerName): ?>
+                                <span class="fw-semibold text-dark me-2">
+                                    <i class="bi bi-hdd-network me-1 text-primary"></i><?= htmlspecialchars($webServerName, ENT_QUOTES, 'UTF-8') ?>
+                                </span>
+                                <?php if ($webServerVersion): ?>
+                                    <span class="badge bg-light text-secondary border">
+                                        v<?= htmlspecialchars($webServerVersion, ENT_QUOTES, 'UTF-8') ?>
+                                    </span>
+                                <?php else: ?>
+                                    <span class="badge bg-light text-muted border">
+                                        <i class="bi bi-shield-check me-1 text-success"></i>Versione non esposta
+                                    </span>
+                                <?php endif; ?>
+                            <?php else: ?>
+                                <span class="text-muted">&mdash; Non rilevato o mascherato</span>
                             <?php endif; ?>
                         </td>
                     </tr>

@@ -11,6 +11,12 @@ document.addEventListener('DOMContentLoaded', function () {
             if (elSiti)   elSiti.textContent   = new Intl.NumberFormat('it-IT').format(data.enti_siti_web || 0);
             if (elErrori) elErrori.textContent = new Intl.NumberFormat('it-IT').format(data.enti_errori || 0);
 
+            const el24h      = document.getElementById('stat-aggiornati-24h');
+            const elStale72h = document.getElementById('stat-stale-72h');
+
+            if (el24h)      el24h.textContent      = new Intl.NumberFormat('it-IT').format(data.enti_24h || 0);
+            if (elStale72h) elStale72h.textContent = new Intl.NumberFormat('it-IT').format(data.enti_stale_72h || 0);
+
             // Palette colori per le torte a categorie multiple
             const palette = ['#0d6efd', '#198754', '#ffc107', '#0dcaf0', '#6f42c1', '#6c757d'];
 

@@ -205,6 +205,106 @@ try {
     }
 
     /**
+     * Normalizza il valore dell'header HTTP 'Server'
+     *
+     * @param string $rawServer Valore grezzo dell'header Server
+     * @return array{name: string|null, version: string|null}
+     */
+    function parseWebServerHeader(string $rawServer): array
+    {
+        $raw = trim($rawServer);
+        if ($raw === '') {
+            return ['name' => null, 'version' => null];
+        }
+
+        $serverMap = [
+            'apache'     => 'Apache',
+            'nginx'      => 'Nginx',
+            'cloudflare' => 'Cloudflare',
+            'iis'        => 'Microsoft-IIS',
+            'litespeed'  => 'LiteSpeed',
+            'caddy'      => 'Caddy',
+            'openresty'  => 'OpenResty',
+        ];
+
+        $detectedName    = null;
+        $detectedVersion = null;
+        $lower = strtolower($raw);
+
+        foreach ($serverMap as $pattern => $canonicalName) {
+            if (str_contains($lower, $pattern)) {
+                $detectedName = $canonicalName;
+
+                // Cerca pattern tipo: Apache/2.4.52 o nginx/1.18.0 o Microsoft-IIS/10.0
+                $regex = '/' . preg_quote($pattern, '/') . '(?:\/|\s+)?v?([0-9]+(?:\.[0-9]+)*)/i';
+                if (preg_match($regex, $raw, $matches)) {
+                    $detectedVersion = $matches[1];
+                }
+                break;
+            }
+        }
+
+        // Se non corrisponde ai pattern noti ma è presente una stringa valida
+        if ($detectedName === null && strlen($raw) <= 50) {
+            $detectedName = ucfirst(explode('/', $raw)[0]);
+        }
+
+        return [
+            'name'    => $detectedName,
+            'version' => $detectedVersion,
+        ];
+    }
+
+    /**
+     * Recupera gli header HTTP reali seguendo i redirect
+     *
+     * @param string $url
+     * @return array<string, string>
+     */
+    function fetchHttpHeaders(string $url): array
+    {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_NOBODY         => true, // Richiesta HEAD (veloce, scarica solo header)
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER         => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_TIMEOUT        => 10,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_USERAGENT      => BOT_USER_AGENT,
+        ]);
+
+        $raw = curl_exec($ch);
+        curl_close($ch);
+
+        if (!$raw || !is_string($raw)) {
+            return [];
+        }
+
+        $headers = [];
+        $lines = explode("\r\n", $raw);
+
+        foreach ($lines as $line) {
+            if (str_contains($line, ':')) {
+                [$k, $v] = explode(':', $line, 2);
+                $normKey = strtolower(trim($k));
+                $val     = trim($v);
+
+                if (isset($headers[$normKey])) {
+                    $headers[$normKey] .= '; ' . $val;
+                } else {
+                    $headers[$normKey] = $val;
+                }
+            }
+        }
+
+        return $headers;
+    }
+
+    /**
      * Analizza le intestazioni HTTP di sicurezza e restituisce mappa e punteggio
      *
      * @param array<string, string> $headers Header normalizzati in lowercase
@@ -569,7 +669,7 @@ try {
                 $tmpFile = tempnam(sys_get_temp_dir(), 'whatweb_');
 
                 // Aggiunto HttpHeaders per il rilevamento delle intestazioni di sicurezza
-                $plugins = 'Title,Email,PHP,HTTPServer,WordPress,Joomla,Drupal,TYPO3,Plone,OpenCMS,Liferay,Magento,PrestaShop,HttpHeaders';
+                $plugins = 'Title,Email,PHP,HTTPServer,WordPress,Joomla,Drupal,TYPO3,Plone,OpenCMS,Liferay,Magento,PrestaShop';
 
                 $execCmd = sprintf(
                     'timeout 30 whatweb %s -U %s -p %s --follow-redirect=always --log-json=%s 2>/dev/null',
@@ -667,23 +767,12 @@ try {
                                 }
                             }
 
-                            // 5. Analisi Header di Sicurezza (HttpHeaders Plugin)
-                            $rawHeaders = $detectedPlugins['HttpHeaders']['string'] ?? [];
-                            $parsedHeaders = [];
-
-                            foreach ($rawHeaders as $headerLine) {
-                                if (str_contains($headerLine, ':')) {
-                                    [$hKey, $hVal] = explode(':', $headerLine, 2);
-                                    $parsedHeaders[trim($hKey)] = trim($hVal);
-                                }
+                            $parsedHeaders = fetchHttpHeaders('https://' . $domain);
+                            if (empty($parsedHeaders)) {
+                                $parsedHeaders = fetchHttpHeaders('http://' . $domain);
                             }
 
-                            if (empty($parsedHeaders) && !empty($site['http_headers'])) {
-                                foreach ($site['http_headers'] as $k => $v) {
-                                    $parsedHeaders[(string)$k] = is_array($v) ? implode(', ', $v) : (string)$v;
-                                }
-                            }
-
+                            // 3. Verifica i security headers
                             if (!empty($parsedHeaders)) {
                                 $sec = checkSecurityHeaders($parsedHeaders);
 
@@ -694,10 +783,34 @@ try {
                                 $ente->setTag('sec_rp', $sec['rp'] ? '1' : '0');
 
                                 $oldScore = $ente->getTag('security_score');
-                                if ($oldScore !== $sec['score']) {
+                                if ($oldScore !== null && $oldScore !== '' && $oldScore !== $sec['score']) {
                                     logStateChange($db, $codiceIpa, 'security_grade_change', $oldScore, $sec['score']);
                                 }
                                 $ente->setTag('security_score', $sec['score']);
+                            } else {
+                                $ente->setTag('security_score', 'F');
+                            }
+
+                            // 6. Rilevamento e Tagging Web Server da Header HTTP
+                            $rawServer = $parsedHeaders['server'] ?? '';
+
+                            if ($rawServer !== '') {
+                                $serverInfo = parseWebServerHeader($rawServer);
+
+                                if ($serverInfo['name'] !== null) {
+                                    $oldServer = $ente->getTag('web_server');
+                                    $newServer = $serverInfo['name'];
+
+                                    if ($oldServer !== null && $oldServer !== '' && $oldServer !== $newServer) {
+                                        logStateChange($db, $codiceIpa, 'web_server_change', $oldServer, $newServer);
+                                    }
+
+                                    $ente->setTag('web_server', $newServer);
+
+                                    if ($serverInfo['version'] !== null) {
+                                        $ente->setTag('web_server_version', $serverInfo['version']);
+                                    }
+                                }
                             }
                         }
                     }
