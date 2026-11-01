@@ -217,36 +217,71 @@ try {
             return ['name' => null, 'version' => null];
         }
 
+        // 1. Pulizia da duplicati e separatori tipici di catene reverse proxy (es. "Aruba-proxy; aruba-proxy")
+        $tokens = preg_split('/[;,]/', $raw);
+        $cleanTokens = [];
+        $blacklist = ['web', 'unknown', 'server', 'none', '-', 'custom'];
+
+        foreach ($tokens as $token) {
+            $token = trim($token);
+            if ($token === '' || in_array(strtolower($token), $blacklist, true)) {
+                continue;
+            }
+            $lowerToken = strtolower($token);
+            if (!isset($cleanTokens[$lowerToken])) {
+                $cleanTokens[$lowerToken] = $token;
+            }
+        }
+
+        if (empty($cleanTokens)) {
+            return ['name' => null, 'version' => null];
+        }
+
+        // Lavoriamo sul primo software significativo della catena
+        $target = reset($cleanTokens);
+        $lowerTarget = strtolower($target);
+
+        // 2. Mappatura ordinata per specificità (OpenResty prima di Nginx, Microsoft-IIS con word-boundary)
         $serverMap = [
-            'apache'     => 'Apache',
-            'nginx'      => 'Nginx',
-            'cloudflare' => 'Cloudflare',
-            'iis'        => 'Microsoft-IIS',
-            'litespeed'  => 'LiteSpeed',
-            'caddy'      => 'Caddy',
-            'openresty'  => 'OpenResty',
+            'openresty'     => ['name' => 'OpenResty',     'pattern' => 'openresty'],
+            'litespeed'     => ['name' => 'LiteSpeed',     'pattern' => 'litespeed'],
+            'caddy'         => ['name' => 'Caddy',         'pattern' => 'caddy'],
+            'cloudflare'    => ['name' => 'Cloudflare',    'pattern' => 'cloudflare'],
+            'microsoft-iis' => ['name' => 'Microsoft-IIS', 'pattern' => '(?:microsoft-iis|iis)'],
+            'nginx'         => ['name' => 'Nginx',         'pattern' => 'nginx'],
+            'apache'        => ['name' => 'Apache',        'pattern' => 'apache'],
+            'lighttpd'      => ['name' => 'Lighttpd',      'pattern' => 'lighttpd'],
         ];
 
         $detectedName    = null;
         $detectedVersion = null;
-        $lower = strtolower($raw);
 
-        foreach ($serverMap as $pattern => $canonicalName) {
-            if (str_contains($lower, $pattern)) {
-                $detectedName = $canonicalName;
+        foreach ($serverMap as $config) {
+            if (preg_match('/\b' . $config['pattern'] . '\b/i', $lowerTarget)) {
+                $detectedName = $config['name'];
 
-                // Cerca pattern tipo: Apache/2.4.52 o nginx/1.18.0 o Microsoft-IIS/10.0
-                $regex = '/' . preg_quote($pattern, '/') . '(?:\/|\s+)?v?([0-9]+(?:\.[0-9]+)*)/i';
-                if (preg_match($regex, $raw, $matches)) {
+                // Cattura la versione associata (es. Apache/2.4.52 o Microsoft-IIS/10.0)
+                $regex = '/\b' . $config['pattern'] . '(?:\/|\s+)?v?([0-9]+(?:\.[0-9]+)+)/i';
+                if (preg_match($regex, $target, $matches)) {
                     $detectedVersion = $matches[1];
                 }
                 break;
             }
         }
 
-        // Se non corrisponde ai pattern noti ma è presente una stringa valida
-        if ($detectedName === null && strlen($raw) <= 50) {
-            $detectedName = ucfirst(explode('/', $raw)[0]);
+        // 3. Fallback per altri software non mappati (es. "Aruba-proxy", "Gunicorn", "Envoy")
+        if ($detectedName === null && strlen($target) <= 50) {
+            $parts = explode('/', $target, 2);
+            $candidateName = trim($parts[0]);
+
+            // Evita di salvare token generici o puramente numerici
+            if ($candidateName !== '' && !in_array(strtolower($candidateName), $blacklist, true) && !is_numeric($candidateName)) {
+                $detectedName = ucfirst($candidateName);
+
+                if (isset($parts[1]) && preg_match('/^([0-9]+(?:\.[0-9]+)+)/', trim($parts[1]), $vMatch)) {
+                    $detectedVersion = $vMatch[1];
+                }
+            }
         }
 
         return [
@@ -864,35 +899,51 @@ try {
                             $rawServer = $parsedHeaders['server'] ?? '';
 
                             if ($rawServer !== '') {
-                                $serverInfo = parseWebServerHeader($rawServer);
+                                // Normalizza e pulisce duplicati, separatori multipli e token generici (es. "Web")
+                                $cleanServerStr = cleanWebServer($rawServer);
 
-                                if ($serverInfo['name'] !== null) {
-                                    $oldServer = $ente->getTag('web_server');
-                                    $newServer = $serverInfo['name'];
+                                if ($cleanServerStr !== null) {
+                                    $serverInfo = parseWebServerHeader($cleanServerStr);
 
-                                    if ($oldServer !== null && $oldServer !== '' && $oldServer !== $newServer) {
-                                        logStateChange($db, $codiceIpa, 'web_server_change', $oldServer, $newServer);
-                                    }
+                                    if (!empty($serverInfo['name'])) {
+                                        $oldServer = $ente->getTag('web_server');
+                                        $newServer = $serverInfo['name'];
 
-                                    $ente->setTag('web_server', $newServer);
+                                        if ($oldServer !== null && $oldServer !== '' && $oldServer !== $newServer) {
+                                            logStateChange($db, $codiceIpa, 'web_server_change', $oldServer, $newServer);
+                                        }
 
-                                    if ($serverInfo['version'] !== null) {
-                                        $ente->setTag('web_server_version', $serverInfo['version']);
+                                        $ente->setTag('web_server', $newServer);
+
+                                        // Gestisce la versione: aggiorna se presente, oppure azzera il tag se rimossa/occultata
+                                        if (!empty($serverInfo['version'])) {
+                                            $ente->setTag('web_server_version', (string)$serverInfo['version']);
+                                        } else {
+                                            $ente->setTag('web_server_version', null);
+                                        }
                                     }
                                 }
                             }
 
-                            $waf = detectWafProvider($parsedHeaders);
+                            // 7. Rilevamento e Tagging WAF Generico
+                            $waf = detectGenericWaf($parsedHeaders);
 
-                            if ($waf['detected']) {
+                            if ($waf['has_waf']) {
                                 $oldWaf = $ente->getTag('waf_provider');
-                                if ($oldWaf !== $waf['provider']) {
-                                    logStateChange($db, $codiceIpa, 'waf_change', $oldWaf, $waf['provider']);
+                                $newWaf = (string)$waf['provider'];
+
+                                if ($oldWaf !== $newWaf) {
+                                    logStateChange($db, $codiceIpa, 'waf_change', $oldWaf, $newWaf);
                                 }
 
                                 $ente->setTag('has_waf', '1');
-                                $ente->setTag('waf_provider', (string)$waf['provider']);
+                                $ente->setTag('waf_provider', $newWaf);
                             } else {
+                                $oldWaf = $ente->getTag('waf_provider');
+                                if ($oldWaf !== null && $oldWaf !== '') {
+                                    logStateChange($db, $codiceIpa, 'waf_removed', $oldWaf, '0');
+                                }
+
                                 $ente->setTag('has_waf', '0');
                                 $ente->setTag('waf_provider', null);
                             }
