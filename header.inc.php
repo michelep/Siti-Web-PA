@@ -27,12 +27,12 @@ $currentUri = (string)($_SERVER['REQUEST_URI'] ?? '/');
 
 // 2. Fallbacks for page titles and meta descriptions
 $pageTitle = isset($gbTitle) && is_string($gbTitle) && $gbTitle !== ''
-    ? htmlspecialchars($gbTitle, ENT_QUOTES, 'UTF-8') . ' | Monitoraggio Siti Web PA'
-    : 'Siti Web PA | Monitoraggio e Sicurezza della Pubblica Amministrazione';
+    ? htmlspecialchars($gbTitle, ENT_QUOTES, 'UTF-8') . ' | Faro PA'
+    : 'Faro PA | Monitoraggio e Sicurezza della Pubblica Amministrazione';
 
 $metaDescription = isset($gbDescription) && is_string($gbDescription) && $gbDescription !== ''
     ? htmlspecialchars($gbDescription, ENT_QUOTES, 'UTF-8')
-    : 'Piattaforma civica indipendente per il monitoraggio della sicurezza dei siti della Pubblica Amministrazione Italiana.';
+    : 'Piattaforma civica indipendente per il monitoraggio tecnico dei siti web della Pubblica Amministrazione Italiana.';
 
 $canonicalUrl = 'https://' . ($_SERVER['HTTP_HOST'] ?? 'pa.zerozone.it') . htmlspecialchars($currentUri, ENT_QUOTES, 'UTF-8');
 $ogImage = isset($gbOgImage) && is_string($gbOgImage) ? $gbOgImage : 'https://' . ($_SERVER['HTTP_HOST'] ?? 'pa.zerozone.it') . '/img/og-cover.png';
@@ -59,7 +59,7 @@ $ogImage = isset($gbOgImage) && is_string($gbOgImage) ? $gbOgImage : 'https://' 
     <meta property="og:description" content="<?= $metaDescription ?>">
     <meta property="og:image" content="<?= $ogImage ?>">
     <meta property="og:locale" content="it_IT">
-    <meta property="og:site_name" content="Siti Web PA">
+    <meta property="og:site_name" content="Faro PA">
 
     <!-- Twitter Cards -->
     <meta name="twitter:card" content="summary_large_image">
@@ -95,8 +95,9 @@ $ogImage = isset($gbOgImage) && is_string($gbOgImage) ? $gbOgImage : 'https://' 
     <header class="mb-4">
         <nav class="navbar navbar-expand-md navbar-dark navbar-custom navbar-slate fixed-top border-bottom border-secondary border-opacity-25 py-2">
             <div class="container">
-                <a class="navbar-brand d-flex align-items-center fw-semibold fs-5" href="/">
-                    <span>Siti Web PA</span>
+                <a class="navbar-brand d-flex align-items-center gap-2" href="/">
+                    <!-- Incolla qui il codice SVG oppure salvalo in assets/img/logo.svg -->
+                    <img src="/img/logo.svg" alt="Faro PA" height="36">
                 </a>
 
                 <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse">

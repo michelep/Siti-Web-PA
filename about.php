@@ -14,7 +14,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/common.inc.php';
 
-$pageTitle = 'Il Progetto - Siti Web PA';
+$pageTitle = 'Il Progetto - Faro PA';
 require_once __DIR__ . '/header.inc.php';
 ?>
 
@@ -24,7 +24,7 @@ require_once __DIR__ . '/header.inc.php';
 
             <!-- Intestazione -->
             <div class="text-center mb-5">
-                <h1 class="display-6 fw-bold">Siti Web PA</h1>
+                <h1 class="display-6 fw-bold">Faro PA</h1>
                 <p class="lead text-muted">
                     Iniziativa civica e indipendente per l'osservazione, il monitoraggio dello stato di salute
                     e l'analisi tecnologica dei portali web della Pubblica Amministrazione Italiana.

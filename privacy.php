@@ -14,7 +14,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/common.inc.php';
 
-$gbTitle = 'Informativa sulla Privacy - Siti Web PA';
+$gbTitle = 'Informativa sulla Privacy - Faro PA';
 require_once __DIR__ . '/header.inc.php';
 ?>
 
@@ -36,7 +36,7 @@ require_once __DIR__ . '/header.inc.php';
                     <i class="bi bi-person-vcard text-primary me-2"></i>1. Titolare del Trattamento
                 </h2>
                 <p class="text-secondary small mb-0">
-                    Il titolare del trattamento dei dati raccolti tramite la piattaforma <strong>Siti Web PA</strong> (<em>pa.zerozone.it</em>) è
+                    Il titolare del trattamento dei dati raccolti tramite la piattaforma <strong>Faro PA</strong> (<em>pa.zerozone.it</em>) è
                     <strong>Michele Pinassi</strong> (Siena, Italia). Per qualsiasi chiarimento, segnalazione o esercizio dei diritti in materia di dati personali,
                     è possibile contattare il titolare all'indirizzo email:
                     <a href="mailto:o-zone@zerozone.it" class="fw-semibold text-decoration-none">o-zone@zerozone.it</a>.

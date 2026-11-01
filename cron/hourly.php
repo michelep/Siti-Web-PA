@@ -342,6 +342,63 @@ try {
     }
 
     /**
+     * Analizza gli header HTTP per identificare la presenza di WAF o CDN
+     *
+     * @param array<string, string> $headers Header normalizzati in lowercase
+     * @return array{detected: bool, provider: string|null, details: string|null}
+     */
+    function detectWafProvider(array $headers): array
+    {
+        // 1. Cloudflare
+        if (!empty($headers['cf-ray']) || isset($headers['cf-mitigated']) || !empty($headers['cf-cache-status'])) {
+            $details = !empty($headers['cf-ray']) ? 'RayID: ' . trim($headers['cf-ray']) : null;
+            if (isset($headers['cf-mitigated'])) {
+                $details .= ' (Mitigated)';
+            }
+            return ['detected' => true, 'provider' => 'Cloudflare', 'details' => $details];
+        }
+
+        // 2. Akamai
+        if (!empty($headers['x-akamai-transformed']) || !empty($headers['akamai-grn']) || !empty($headers['x-akamai-request-id'])) {
+            return ['detected' => true, 'provider' => 'Akamai', 'details' => 'Akamai Edge/WAF'];
+        }
+
+        // 3. AWS WAF / CloudFront
+        if (!empty($headers['x-amz-cf-id']) || !empty($headers['x-amzn-waf-action'])) {
+            $action = $headers['x-amzn-waf-action'] ?? null;
+            return ['detected' => true, 'provider' => 'AWS CloudFront/WAF', 'details' => $action ? "Action: {$action}" : null];
+        }
+
+        // 4. Azure Front Door / Application Gateway
+        if (!empty($headers['x-azure-ref']) || !empty($headers['x-ms-ref'])) {
+            return ['detected' => true, 'provider' => 'Microsoft Azure WAF', 'details' => 'Azure Front Door'];
+        }
+
+        // 5. Fastly
+        if (!empty($headers['x-fastly-request-id']) || !empty($headers['fastly-restarts'])) {
+            return ['detected' => true, 'provider' => 'Fastly', 'details' => 'Fastly Edge Cloud'];
+        }
+
+        // 6. Imperva Incapsula
+        if (!empty($headers['x-iinfo']) || (isset($headers['x-cdn']) && str_contains(strtolower($headers['x-cdn']), 'imperva'))) {
+            return ['detected' => true, 'provider' => 'Imperva', 'details' => 'Incapsula Cloud WAF'];
+        }
+
+        // 7. Sucuri
+        if (!empty($headers['x-sucuri-id']) || !empty($headers['x-sucuri-cache'])) {
+            return ['detected' => true, 'provider' => 'Sucuri', 'details' => 'Sucuri CloudProxy'];
+        }
+
+        // 8. F5 BIG-IP (rilevabile spesso tramite i cookie)
+        $cookies = $headers['set-cookie'] ?? '';
+        if (str_contains($cookies, 'BIGipServer') || preg_match('/TS[0-9a-f]{6,8}=/i', $cookies)) {
+            return ['detected' => true, 'provider' => 'F5 BIG-IP', 'details' => 'F5 Traffic / ASM'];
+        }
+
+        return ['detected' => false, 'provider' => null, 'details' => null];
+    }
+
+    /**
      * Verifica la presenza e la configurazione dei record SPF e DMARC
      *
      * @param string $domain Dominio dell'ente (es. comune.siena.it)
@@ -811,6 +868,21 @@ try {
                                         $ente->setTag('web_server_version', $serverInfo['version']);
                                     }
                                 }
+                            }
+
+                            $waf = detectWafProvider($parsedHeaders);
+
+                            if ($waf['detected']) {
+                                $oldWaf = $ente->getTag('waf_provider');
+                                if ($oldWaf !== $waf['provider']) {
+                                    logStateChange($db, $codiceIpa, 'waf_change', $oldWaf, $waf['provider']);
+                                }
+
+                                $ente->setTag('has_waf', '1');
+                                $ente->setTag('waf_provider', (string)$waf['provider']);
+                            } else {
+                                $ente->setTag('has_waf', '0');
+                                $ente->setTag('waf_provider', null);
                             }
                         }
                     }

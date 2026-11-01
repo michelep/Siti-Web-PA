@@ -299,6 +299,26 @@ require_once __DIR__ . '/header.inc.php';
                             <?php endif; ?>
                         </td>
                     </tr>
+                    <?php
+                    $hasWaf      = $ente->getTag('has_waf') === '1';
+                    $wafProvider = $ente->getTag('waf_provider');
+                    ?>
+                    <tr>
+                        <th scope="row" class="text-muted ps-0">Protezione WAF:</th>
+                        <td class="pe-0">
+                            <?php if ($hasWaf && $wafProvider): ?>
+                                <span class="badge bg-primary bg-opacity-10 text-primary border border-primary py-1 px-2">
+                                    <i class="bi bi-shield-check me-1"></i><?= htmlspecialchars($wafProvider, ENT_QUOTES, 'UTF-8') ?>
+                                </span>
+                            <?php elseif ($hasWaf): ?>
+                                <span class="badge bg-secondary bg-opacity-10 text-secondary border py-1 px-2">
+                                    <i class="bi bi-shield-shaded me-1"></i>WAF Rilevato
+                                </span>
+                            <?php else: ?>
+                                <span class="text-muted">&mdash; Nessun WAF rilevato</span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
                 </tbody>
             </table>
         </div>
