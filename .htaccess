@@ -18,6 +18,7 @@ RewriteRule ^(?:\.git(?:\/.*)?|\.gitignore|\.gitattributes)$ - [F,L,NC]
 
     RewriteRule ^ajax(/([^/]*))?$ ajax.php?action=$2 [QSA,L]
     RewriteRule ^details(/([^/]*))?$ details.php?codice_ipa=$2
+    RewriteRule ^stats/?$ stats.php [QSA,L]
     RewriteRule ^errors/?$ errors.php [QSA,L]
 
     RewriteCond %{REQUEST_FILENAME} !-f

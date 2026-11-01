@@ -113,6 +113,12 @@ $ogImage = isset($gbOgImage) && is_string($gbOgImage) ? $gbOgImage : 'https://' 
                         </li>
 
                         <li class="nav-item">
+                            <a class="nav-link px-3 <?= str_starts_with($currentUri, '/stats') ? 'active fw-semibold' : '' ?>" href="/stats">
+                                <i class="bi bi-bar-chart-line me-1"></i> Statistiche
+                            </a>
+                        </li>
+
+                        <li class="nav-item">
                             <a class="nav-link px-3 <?= str_starts_with($currentUri, '/errors') ? 'active fw-semibold' : '' ?>" href="/errors">
                                 <i class="bi bi-exclamation-triangle me-1"></i> Anomalie
                             </a>

@@ -767,23 +767,35 @@ try {
 
                             // 3. Rilevamento Versione PHP
                             $phpVersion = null;
+
                             if (isset($detectedPlugins['PHP'])) {
-                                $phpVersion = $detectedPlugins['PHP']['version'][0] ?? $detectedPlugins['PHP']['string'][0] ?? 'Detected';
+                                $rawVal = $detectedPlugins['PHP']['version'][0] ?? $detectedPlugins['PHP']['string'][0] ?? null;
+                                if ($rawVal && preg_match('#(\d+(?:\.\d+)+)#', (string)$rawVal, $m)) {
+                                    $phpVersion = $m[1];
+                                }
                             } elseif (isset($detectedPlugins['HTTPServer']['string'])) {
                                 foreach ($detectedPlugins['HTTPServer']['string'] as $serverString) {
-                                    if (preg_match('#PHP/([0-9\.]+)#i', $serverString, $matches)) {
+                                    if (preg_match('#PHP/(\d+(?:\.\d+)+)#i', $serverString, $matches)) {
                                         $phpVersion = $matches[1];
                                         break;
                                     }
                                 }
                             }
 
-                            if ($phpVersion) {
+                            // Fallback opzionale sugli header HTTP reali se WhatWeb non ha rilevato nulla
+                            if (!$phpVersion && isset($parsedHeaders['x-powered-by'])) {
+                                if (preg_match('#PHP/(\d+(?:\.\d+)+)#i', $parsedHeaders['x-powered-by'], $matches)) {
+                                    $phpVersion = $matches[1];
+                                }
+                            }
+
+                            // Aggiorna lo stato solo se è stata isolata una versione valida
+                            if ($phpVersion !== null) {
                                 $oldPhp = $ente->getTag('php_version');
                                 if ($phpVersion !== $oldPhp) {
-                                    logStateChange($db, $codiceIpa, 'php_change', $oldPhp, (string)$phpVersion);
+                                    logStateChange($db, $codiceIpa, 'php_change', $oldPhp, $phpVersion);
                                 }
-                                $ente->setTag('php_version', (string)$phpVersion);
+                                $ente->setTag('php_version', $phpVersion);
                             }
 
                             // 4. Rilevamento CMS
