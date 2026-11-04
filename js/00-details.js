@@ -17,6 +17,11 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
     }
 
+    const popoverTriggerList = document.querySelectorAll('[data-bs-toggle="popover"]');
+        [...popoverTriggerList].map(popoverTriggerEl => new bootstrap.Popover(popoverTriggerEl, {
+            sanitize: false // Permette le classi Bootstrap interne (text-danger, bi-*, ecc.)
+        }));
+
     // Inizializzazione Mappa Leaflet
     const map = L.map('detail-map').setView([lat, lng], 13);
 

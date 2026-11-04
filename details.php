@@ -50,7 +50,7 @@ $validationError = $ente->getTag('validation_error_website');
 $hostingProvider = $ente->getTag('hosting_provider');
 $websiteTitle    = $ente->getTag('website_title');
 $mxTag           = $ente->getTag('mx_tag');
-$screenshot      = $ente->getTag('screenshot');
+$screenshot    = htmlspecialchars($ente->getScreenshot(), ENT_QUOTES, 'UTF-8');
 
 // Recapiti Email IPA
 $mail1     = $ente->getTag('mail1');
@@ -92,6 +92,18 @@ $gradeBadge = match ($secScore) {
     default   => 'bg-danger'
 };
 
+// --- Estrazione Metadati SSL / TLS per la scheda ente ---
+$tlsScore         =$ente->getTag('tls_security_score');
+$tlsNegotiated    =$ente->getTag('tls_negotiated');
+$sslDaysRemaining =$ente->getTag('ssl_days_remaining');
+$sslValidTo       =$ente->getTag('ssl_valid_to');
+$sslIssuer        =$ente->getTag('ssl_issuer');
+$hasTls10Legacy   =$ente->getTag('deprecated_tls10_enabled') !== null;
+$hasTls11Legacy   =$ente->getTag('deprecated_tls11_enabled') !== null;
+$isModernOnly     =$ente->getTag('modern_tls_only') !== null;
+$isSslInvalid     =$ente->getTag('ssl_invalid_or_expired') !== null;
+$isHttpOnly       =$ente->getTag('insecure_http_only') !== null;
+
 // URL del sito
 $sitoRaw = (string)($ente->sitoIstituzionale ?: '');
 $sitoUrl = '';
@@ -128,12 +140,19 @@ require_once __DIR__ . '/header.inc.php';
         </ol>
     </nav>
 
+    <?php
+    $catCodice = $ente->codiceCategoria ?? null;
+    $meta = mapCodiceCategoria($catCodice);
+    ?>
+
     <!-- INTESTAZIONE ENTE, BADGE STATO E DATA CONTROLLO -->
     <div class="d-flex justify-content-between align-items-start mb-4">
         <div>
             <h1 class="h2 fw-bold mb-1"><?= htmlspecialchars($ente->denominazioneEnte, ENT_QUOTES, 'UTF-8') ?></h1>
             <p class="text-muted mb-0">
-                <span class="badge bg-secondary me-2"><?= htmlspecialchars($ente->tipologia ?: 'Ente Pubblico', ENT_QUOTES, 'UTF-8') ?></span>
+                <span class="badge <?= $meta['badge_class'] ?> px-2 py-1" title="Codice Categoria IPA: <?= htmlspecialchars((string)$catCodice) ?>">
+                    <i class="bi <?= $meta['icon'] ?> me-1"></i><?= htmlspecialchars($meta['label']) ?>
+                </span>
                 <strong>Codice IPA:</strong> <?= htmlspecialchars($codiceIpa, ENT_QUOTES, 'UTF-8') ?>
             </p>
         </div>
@@ -175,7 +194,7 @@ require_once __DIR__ . '/header.inc.php';
     <?php endif; ?>
 
     <div class="row g-4">
-        <!-- SCHEDA SITO WEB & MONITORING -->
+    <!-- SCHEDA SITO WEB & MONITORING -->
         <div class="col-lg-7">
             <div class="card border-0 shadow-sm p-4 h-100">
                 <h2 class="h5 fw-bold mb-3"><i class="bi bi-globe me-2 text-primary"></i>Informazioni Web &amp; Infrastruttura</h2>
@@ -196,7 +215,7 @@ require_once __DIR__ . '/header.inc.php';
                         </tr>
                         <tr>
                             <th scope="row" class="text-muted ps-0">Titolo Pagina:</th>
-                            <td class="pe-0 fw-medium text-break"><?= htmlspecialchars($websiteTitle ?: '&mdash;', ENT_QUOTES, 'UTF-8') ?></td>
+                            <td class="pe-0 fw-medium text-break"><?= htmlspecialchars($websiteTitle ?: '—', ENT_QUOTES, 'UTF-8') ?></td>
                         </tr>
                         <tr>
                             <th scope="row" class="text-muted ps-0">Hosting Provider:</th>
@@ -216,6 +235,150 @@ require_once __DIR__ . '/header.inc.php';
                                 <?php endif; ?>
                             </td>
                         </tr>
+
+                        <!-- CERTIFICATO SSL & SCADENZA -->
+                        <tr>
+                            <th scope="row" class="text-muted ps-0 align-top pt-2">Certificato SSL:</th>
+                            <td class="pe-0 pt-2">
+                                <?php if ($isHttpOnly): ?>
+                                    <span class="badge bg-danger"><i class="bi bi-shield-slash me-1"></i>Assente (Solo HTTP)</span>
+                                <?php elseif ($isSslInvalid || ($sslDaysRemaining !== null && (int)$sslDaysRemaining < 0)): ?>
+                                    <span class="badge bg-danger"><i class="bi bi-shield-x me-1"></i>Scaduto o Non Valido</span>
+                                    <?php if ($sslValidTo): ?>
+                                        <span class="small text-muted ms-2">(Terminato il <?= date('d/m/Y', strtotime($sslValidTo)) ?>)</span>
+                                    <?php endif; ?>
+                                <?php elseif ($sslDaysRemaining !== null): ?>
+                                    <?php
+                                        $days = (int)$sslDaysRemaining;
+                                        if ($days <= 14) {
+                                            $badgeClass = 'bg-danger text-white';
+                                            $icon = 'bi-shield-exclamation';
+                                        } elseif ($days <= 30) {
+                                            $badgeClass = 'bg-warning text-dark';
+                                            $icon = 'bi-exclamation-triangle';
+                                        } else {
+                                            $badgeClass = 'bg-success text-white';
+                                            $icon = 'bi-shield-check';
+                                        }
+                                    ?>
+                                    <div class="d-flex flex-wrap align-items-center gap-2">
+                                        <span class="badge <?= $badgeClass ?>">
+                                            <i class="bi <?= $icon ?> me-1"></i>Valido (<?= $days ?> giorni residui)
+                                        </span>
+                                        <?php if ($sslValidTo): ?>
+                                            <span class="small text-muted">Scadenza: <strong><?= date('d/m/Y', strtotime($sslValidTo)) ?></strong></span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <?php if ($sslIssuer): ?>
+                                        <div class="small text-muted mt-1">
+                                            <i class="bi bi-building me-1"></i>CA: <?= htmlspecialchars($sslIssuer, ENT_QUOTES, 'UTF-8') ?>
+                                        </div>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    <span class="text-muted fst-italic">— Non rilevato</span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <!-- SICUREZZA & PROTOCOLLO TLS -->
+                        <tr>
+                            <th scope="row" class="text-muted ps-0 align-top pt-2">Sicurezza TLS:</th>
+                            <td class="pe-0 pt-2">
+                                <?php
+                                    $tlsScore       = $ente->getTag('tls_security_score');
+                                    $tlsNegotiated  = $ente->getTag('tls_negotiated');
+                                    $hasTls10Legacy = $ente->getTag('deprecated_tls10_enabled') !== null;
+                                    $hasTls11Legacy = $ente->getTag('deprecated_tls11_enabled') !== null;
+                                    $isModernOnly   = $ente->getTag('modern_tls_only') !== null;
+                                ?>
+
+                                <?php if ($tlsScore !== null): ?>
+                                    <?php
+                                        $score = (int)$tlsScore;
+                                        if ($score >= 85) {
+                                            $barColor = 'bg-success';
+                                            $grade = 'A';
+                                        } elseif ($score >= 60) {
+                                            $barColor = 'bg-warning';
+                                            $grade = 'B';
+                                        } else {
+                                            $barColor = 'bg-danger';
+                                            $grade = 'F';
+                                        }
+
+                                        // Contenuto HTML esplicativo per il Popover
+                                        $popoverContent = htmlspecialchars('
+                                            <div class="small">
+                                                <div class="fw-semibold border-bottom pb-1 mb-2">Criteri di Calcolo (Base: 100 pt)</div>
+                                                <ul class="list-unstyled mb-2">
+                                                    <li class="text-success mb-1"><i class="bi bi-check-circle me-1"></i><strong>HTTPS attivo &amp; valido:</strong> +100 pt</li>
+                                                    <li class="text-danger mb-1"><i class="bi bi-dash-circle me-1"></i><strong>TLS 1.0 attivo:</strong> -45 pt (RFC 8996)</li>
+                                                    <li class="text-warning-emphasis mb-1"><i class="bi bi-dash-circle me-1"></i><strong>TLS 1.1 attivo:</strong> -25 pt (RFC 8996)</li>
+                                                    <li class="text-danger mb-1"><i class="bi bi-dash-circle me-1"></i><strong>Scadenza &le; 7 giorni:</strong> -20 pt</li>
+                                                    <li class="text-danger"><i class="bi bi-x-circle me-1"></i><strong>Scaduto o non valido:</strong> 0 pt</li>
+                                                </ul>
+                                                <div class="border-top pt-1 text-muted" style="font-size: 0.75rem;">
+                                                    <strong>A (&ge;85):</strong> Eccellente &bull; <strong>B (60-84):</strong> Migliorabile &bull; <strong>F (&lt;60):</strong> Critico
+                                                </div>
+                                            </div>
+                                        ', ENT_QUOTES, 'UTF-8');
+                                    ?>
+
+                                    <!-- Barra, Score e Icona Popover -->
+                                    <div class="d-flex align-items-center gap-2 mb-2" style="max-width: 380px;">
+                                        <div class="progress flex-grow-1" style="height: 8px;">
+                                            <div class="progress-bar <?= $barColor ?>" role="progressbar" style="width: <?= max(6, $score) ?>%;" aria-valuenow="<?= $score ?>" aria-valuemin="0" aria-valuemax="100"></div>
+                                        </div>
+                                        <span class="badge <?= $barColor ?> <?= $score >= 60 && $score < 85 ? 'text-dark' : 'text-white' ?> fw-semibold">
+                                            <?= $score ?>/100 (Grado <?= $grade ?>)
+                                        </span>
+
+                                        <!-- Icona Popover Bootstrap -->
+                                        <button type="button"
+                                                class="btn btn-link text-secondary p-0 lh-1"
+                                                data-bs-toggle="popover"
+                                                data-bs-trigger="hover focus"
+                                                data-bs-placement="top"
+                                                data-bs-html="true"
+                                                data-bs-title="<i class='bi bi-shield-lock me-1 text-primary'></i>Calcolo Punteggio TLS"
+                                                data-bs-content="<?= $popoverContent ?>"
+                                                aria-label="Informazioni sul calcolo del punteggio TLS">
+                                            <i class="bi bi-question-circle-fill text-muted opacity-75 fs-6"></i>
+                                        </button>
+                                    </div>
+
+                                    <!-- Tag e indicatori di protocollo -->
+                                    <div class="d-flex flex-wrap gap-1 align-items-center">
+                                        <?php if ($tlsNegotiated): ?>
+                                            <span class="badge bg-light text-dark border">
+                                                <i class="bi bi-lock me-1 text-primary"></i><?= htmlspecialchars($tlsNegotiated, ENT_QUOTES, 'UTF-8') ?>
+                                            </span>
+                                        <?php endif; ?>
+
+                                        <?php if ($isModernOnly): ?>
+                                            <span class="badge bg-success-subtle text-success border border-success-subtle">
+                                                <i class="bi bi-shield-shaded me-1"></i>TLS 1.3 Esclusivo
+                                            </span>
+                                        <?php endif; ?>
+
+                                        <?php if ($hasTls10Legacy): ?>
+                                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle" title="TLS 1.0 attivo (deprecato)">
+                                                <i class="bi bi-exclamation-octagon me-1"></i>TLS 1.0 Legacy
+                                            </span>
+                                        <?php endif; ?>
+
+                                        <?php if ($hasTls11Legacy): ?>
+                                            <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle" title="TLS 1.1 attivo (deprecato)">
+                                                <i class="bi bi-exclamation-triangle me-1"></i>TLS 1.1 Legacy
+                                            </span>
+                                        <?php endif; ?>
+                                    </div>
+                                <?php elseif ($isHttpOnly): ?>
+                                    <span class="badge bg-secondary">N/D (Traffico in chiaro)</span>
+                                <?php else: ?>
+                                    <span class="text-muted fst-italic">— Non analizzato</span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -226,14 +389,7 @@ require_once __DIR__ . '/header.inc.php';
             <div class="card border-0 shadow-sm p-4 h-100 text-center">
                 <h2 class="h5 fw-bold mb-3 text-start"><i class="bi bi-display me-2 text-primary"></i>Anteprima Homepage</h2>
                 <div class="d-flex align-items-center justify-content-center bg-light rounded border overflow-hidden" style="min-height: 220px;">
-                    <?php if ($screenshot && $screenshot !== 'none.jpg' && file_exists(__DIR__ . '/screenshots/' . $screenshot)): ?>
-                        <img src="/screenshots/<?= htmlspecialchars($screenshot, ENT_QUOTES, 'UTF-8') ?>" alt="Screenshot <?= htmlspecialchars($codiceIpa, ENT_QUOTES, 'UTF-8') ?>" class="img-fluid rounded shadow-sm" style="max-height: 240px; object-fit: cover;">
-                    <?php else: ?>
-                        <div class="text-muted py-4">
-                            <i class="bi bi-camera-video-off fs-1 d-block mb-2 text-secondary"></i>
-                            <span>Nessuno screenshot disponibile</span>
-                        </div>
-                    <?php endif; ?>
+                    <img class="card-img-top" src="<?= $screenshot ?>" alt="<?= $ente->denominazioneEnte ?>">
                 </div>
             </div>
         </div>
@@ -281,9 +437,9 @@ require_once __DIR__ . '/header.inc.php';
                     <tr>
                         <th scope="row" class="text-muted ps-0">Web Server:</th>
                         <td class="pe-0">
-                            <?php if ($webServerName): ?>
+                            <?php if ($webServer): ?>
                                 <span class="fw-semibold text-dark me-2">
-                                    <i class="bi bi-hdd-network me-1 text-primary"></i><?= htmlspecialchars($webServerName, ENT_QUOTES, 'UTF-8') ?>
+                                    <i class="bi bi-hdd-network me-1 text-primary"></i><?= htmlspecialchars($webServer, ENT_QUOTES, 'UTF-8') ?>
                                 </span>
                                 <?php if ($webServerVersion): ?>
                                     <span class="badge bg-light text-secondary border">

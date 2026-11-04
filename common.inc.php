@@ -84,6 +84,7 @@ class Ente
     public function __construct(
         public ?string $codiceIpa = null,
         public ?string $denominazioneEnte = null,
+        public ?string $codiceCategoria = null,
         public ?string $tipologia = null,
         public ?string $codiceComuneIstat = null,
         public ?string $cap = null,
@@ -103,7 +104,7 @@ class Ente
     {
         $db = Database::getInstance();
 
-        $sql = 'SELECT Denominazione_ente, Tipologia, Codice_comune_ISTAT, CAP, Indirizzo, latitude, longitude, Sito_istituzionale, Data_aggiornamento, Data_controllo
+        $sql = 'SELECT Denominazione_ente, Codice_categoria, Tipologia, Codice_comune_ISTAT, CAP, Indirizzo, latitude, longitude, Sito_istituzionale, Data_aggiornamento, Data_controllo
                 FROM Enti
                 WHERE Codice_IPA = :codice_ipa
                 LIMIT 1';
@@ -119,6 +120,7 @@ class Ente
 
         $this->codiceIpa         = $codiceIpa;
         $this->denominazioneEnte = $row['Denominazione_ente'];
+        $this->codiceCategoria   = $row['Codice_categoria'];
         $this->tipologia         = $row['Tipologia'];
         $this->codiceComuneIstat = $row['Codice_comune_ISTAT'];
         $this->cap               = $row['CAP'];
@@ -177,18 +179,19 @@ class Ente
 
     public function getScreenshot(): string
     {
-        $url = $this->getTag('screenshot');
+        global $CFG;
 
-        if ($url) {
-            $safeFileName = basename($url);
-            $filePath     = __DIR__ . '/screenshots/' . $safeFileName;
+        $screenshot = $this->getTag('screenshot');
 
-            if (file_exists($filePath)) {
-                return '/screenshots/' . $safeFileName;
-            }
+        if (empty($screenshot)) {
+            return '/img/screenshot_none.jpg';
         }
 
-        return '/screenshots/none.jpg';
+        $baseUrl = $CFG['R2_PUBLIC_BASE_URL'];
+
+        $url = $baseUrl . '/screenshots/' . rawurlencode($screenshot);
+
+        return $url;
     }
 
     /**
@@ -523,5 +526,131 @@ function evaluateDmarcAdequacy(bool $hasDmarc, string $policy): array
             'badge_class' => 'bg-secondary',
             'icon'        => 'bi-question-circle',
         ]
+    };
+}
+
+/**
+ * Mappa il Codice_categoria dell'IndicePA in una macro-categoria normalizzata
+ *
+ * @param string|null $codiceCategoria Codice categoria da IndicePA (es. L6, L22, C1, L33)
+ * @return array{slug: string, label: string, icon: string, badge_class: string}
+ */
+function mapCodiceCategoria(?string $codiceCategoria): array
+{
+    $code = strtoupper(trim((string)$codiceCategoria));
+
+    // Mappatura puntuale dei codici categoria IndicePA
+    return match ($code) {
+        // --- 1. COMUNI E FORME ASSOCIATIVE ---
+        'L6',  // Comuni e loro Consorzi e Associazioni
+        'L13', // Unioni di Comuni e Comunità Montane
+        'L20'  // Consorzi di Bacino / Consorzi tra Enti Locali
+            => [
+                'slug'        => 'comune',
+                'label'       => 'Comune / Unione',
+                'icon'        => 'bi-bank',
+                'badge_class' => 'bg-primary-subtle text-primary border-primary-subtle',
+            ],
+
+        // --- 2. ORDINI E COLLEGI PROFESSIONALI ---
+        'L22'  // Ordini, Collegi professionali e relativi Consigli/Federazioni
+            => [
+                'slug'        => 'ordine_professionale',
+                'label'       => 'Ordine Professionale',
+                'icon'        => 'bi-award-fill',
+                'badge_class' => 'bg-warning-subtle text-dark border-warning-subtle',
+            ],
+
+        // --- 3. SCUOLE E ISTITUTI DI ISTRUZIONE STATALE ---
+        'L33', // Istituti di Istruzione Statale di Ogni Ordine e Grado
+        'L34'  // Istituzioni per l'Alta Formazione Artistica, Musicale e Coreutica (AFAM)
+            => [
+                'slug'        => 'scuola',
+                'label'       => 'Scuola / Istruzione',
+                'icon'        => 'bi-mortarboard-fill',
+                'badge_class' => 'bg-success-subtle text-success border-success-subtle',
+            ],
+
+        // --- 4. SANITÀ E OSPEDALI ---
+        'L7',  // Aziende Sanitarie Locali (ASL)
+        'L8',  // Aziende Ospedaliere, Policlinici e AOUP
+        'L21', // Istituti di Ricovero e Cura a Carattere Scientifico (IRCCS) Pubblici
+        'L28'  // Agenzie Regionali Sanitarie e per la Protezione Ambientale (ARPA)
+            => [
+                'slug'        => 'sanita',
+                'label'       => 'Sanità & Ospedali',
+                'icon'        => 'bi-hospital-fill',
+                'badge_class' => 'bg-danger-subtle text-danger border-danger-subtle',
+            ],
+
+        // --- 5. PROVINCE E CITTÀ METROPOLITANE ---
+        'L5',  // Province
+        'L46'  // Città Metropolitane
+            => [
+                'slug'        => 'provincia',
+                'label'       => 'Provincia / Città Metro',
+                'icon'        => 'bi-diagram-3-fill',
+                'badge_class' => 'bg-info-subtle text-info border-info-subtle',
+            ],
+
+        // --- 6. REGIONI E AUTONOMIE REGIONALI ---
+        'L4'   // Regioni e Province Autonome, loro Consorzi e Agenzie
+            => [
+                'slug'        => 'regione',
+                'label'       => 'Regione & Autonomie',
+                'icon'        => 'bi-map-fill',
+                'badge_class' => 'bg-dark-subtle text-dark border-dark-subtle',
+            ],
+
+        // --- 7. UNIVERSITÀ ED ENTI DI RICERCA ---
+        'L11', // Università e Istituti di Istruzione Universitaria Pubblici
+        'C14'  // Enti di Ricerca Pubblici Nazionali (CNR, ENEA, INFN, INGV, ecc.)
+            => [
+                'slug'        => 'universita',
+                'label'       => 'Università & Ricerca',
+                'icon'        => 'bi-book-fill',
+                'badge_class' => 'bg-purple-subtle text-purple border-purple-subtle',
+            ],
+
+        // --- 8. CAMERE DI COMMERCIO ---
+        'L17'  // Camere di Commercio, Industria, Artigianato e Agricoltura (CCIAA) e Unioni Regionali
+            => [
+                'slug'        => 'cciaa',
+                'label'       => 'Camera di Commercio',
+                'icon'        => 'bi-briefcase-fill',
+                'badge_class' => 'bg-secondary-subtle text-secondary border-secondary-subtle',
+            ],
+
+        // --- 9. AMMINISTRAZIONI CENTRALI E MINISTERI ---
+        'C1',  // Presidenza del Consiglio dei Ministri e Ministeri
+        'C2',  // Agenzie Fiscali (Entrate, Dogane, Demanio)
+        'C3',  // Enti di Regolazione dell'Attività Economica e Autorità Indipendenti
+        'C5',  // Enti Nazionali di Previdenza e Assistenza Sociale (INPS, INAIL)
+        'C16'  // Forze dell'Ordine e Corpi Armati
+            => [
+                'slug'        => 'centrale',
+                'label'       => 'PA Centrale / Ministero',
+                'icon'        => 'bi-building-fill-lock',
+                'badge_class' => 'bg-dark text-white',
+            ],
+
+        // --- 10. GESTORI PUBBLICI E SOCIETÀ A CONTROLLO PUBBLICO ---
+        'G4',  // Società a Controllo Pubblico
+        'G5',  // Gestori di Pubblici Servizi
+        'L37'  // Agenzie, Enti Regionali/Provinciali del Lavoro o Trasporti
+            => [
+                'slug'        => 'gestore_servizi',
+                'label'       => 'Servizi Pubblici / Partecipata',
+                'icon'        => 'bi-gear-wide-connected',
+                'badge_class' => 'bg-body-secondary text-body border',
+            ],
+
+        // --- FALLBACK / NON CLASSIFICATO ---
+        default => [
+            'slug'        => 'altro',
+            'label'       => $code !== '' ? "Altro Ente ({$code})" : 'Altro Ente Pubblico',
+            'icon'        => 'bi-building',
+            'badge_class' => 'bg-light text-muted border',
+        ],
     };
 }

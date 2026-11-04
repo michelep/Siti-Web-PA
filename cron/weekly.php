@@ -250,6 +250,7 @@ try {
     $sqlEnte = 'INSERT INTO Enti (
                     Codice_IPA,
                     Denominazione_ente,
+                    Codice_categoria,
                     Tipologia,
                     Codice_comune_ISTAT,
                     CAP,
@@ -262,6 +263,7 @@ try {
                 ) VALUES (
                     :codice_ipa,
                     :denominazione_ente,
+                    :codice_categoria,
                     :tipologia,
                     :codice_comune_istat,
                     :cap,
@@ -273,6 +275,7 @@ try {
                     NOW()
                 ) ON DUPLICATE KEY UPDATE
                     Denominazione_ente = VALUES(Denominazione_ente),
+                    Codice_categoria = VALUES(Codice_categoria),
                     Tipologia = VALUES(Tipologia),
                     Codice_comune_ISTAT = VALUES(Codice_comune_ISTAT),
                     CAP = VALUES(CAP),
@@ -329,6 +332,7 @@ try {
         $stmtEnte->execute([
             'codice_ipa'          => $codiceIpa,
             'denominazione_ente'  => $enteData['Denominazione_ente'] ?? $enteData['des_amm'] ?? '',
+            'codice_categoria'    => $enteData['Codice_Categoria'] ?? null,
             'tipologia'           => $enteData['Tipologia'] ?? $enteData['tipologia'] ?? null,
             'codice_comune_istat' => $istatCode !== '' ? $istatCode : null,
             'cap'                 => $cap !== '' ? $cap : null,

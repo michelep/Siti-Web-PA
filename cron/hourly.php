@@ -25,6 +25,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../common.inc.php';
 
 use daandesmedt\PHPHeadlessChrome\HeadlessChrome;
+use Aws\S3\S3Client;
 
 // Resolve logger reference
 /** @var Monolog\Logger $logger */
@@ -42,6 +43,24 @@ try {
         echo "Lock file exists.\n";
         exit(0);
     }
+
+    $r2Config = [
+        'accountId'  => defined('R2_ACCOUNT_ID') ? R2_ACCOUNT_ID : 'fe9b0a26bc12956d26ef39ec8552f7b9',
+        'accessKey'  => defined('R2_ACCESS_KEY') ? R2_ACCESS_KEY : '8873aad0b464713dbbfb06ec4fa5bb2d',
+        'secretKey'  => defined('R2_SECRET_KEY') ? R2_SECRET_KEY : '7a851cca78c7292d6ebd30c6d8c994ce226f7fa461bf9b08c1e418b048ba92d9',
+        'bucketName' => defined('R2_BUCKET_NAME') ? R2_BUCKET_NAME : 'faropa',
+        'prefix'     => 'screenshots/', // Prefisso/cartella virtuale nel bucket
+    ];
+
+    $s3 = new S3Client([
+        'version'     => 'latest',
+        'region'      => 'auto',
+        'endpoint'    => "https://{$r2Config['accountId']}.r2.cloudflarestorage.com",
+        'credentials' => [
+            'key'    => $r2Config['accessKey'],
+            'secret' => $r2Config['secretKey'],
+        ],
+    ]);
 
     /**
      * Helper to reliably extract domain host from URL or string
@@ -127,20 +146,192 @@ try {
     }
 
     /**
-     * Perform deep website health check (DNS, HTTP Status, SSL validity)
+     * Ispeziona la connessione TLS: recupera protocollo negoziato, cifrario e metadati del certificato X.509.
+     *
+     * @param string $domain Dominio da testare (es. comune.roma.it)
+     * @param int $port Porta TLS (default: 443)
+     * @param float|int $timeout Timeout in secondi (default: 4)
+     * @return array{
+     *     connected: bool,
+     *     protocol: ?string,
+     *     cipher: ?string,
+     *     days_remaining: ?int,
+     *     valid_to: ?string,
+     *     issuer: ?string,
+     *     error: ?string
+     * }
      */
-    function checkWebsiteHealth(string $domain): array
+    function inspectTlsConnection(string $domain, int $port = 443, float|int $timeout = 4): array
     {
-        // 1. Check DNS A/AAAA records
-        $dnsA = @dns_get_record($domain, DNS_A + DNS_AAAA);
-        if (empty($dnsA)) {
+        $sslOptions = [
+            'ssl' => [
+                'capture_peer_cert' => true,
+                'verify_peer'       => false, // Non blocca l'ispezione per estrarre dati anche da certificati scaduti
+                'verify_peer_name'  => false,
+                'allow_self_signed' => true,
+                'SNI_enabled'       => true,
+                'peer_name'         => $domain,
+            ],
+        ];
+
+        $ctx = stream_context_create($sslOptions);
+        $errno = 0;
+        $errstr = '';
+
+        // Handshake socket con flag asincrono/bloccante calibrato
+        $client = @stream_socket_client(
+            "ssl://{$domain}:{$port}",
+            $errno,
+            $errstr,
+            (float)$timeout,
+            STREAM_CLIENT_CONNECT,
+            $ctx
+        );
+
+        if (!$client) {
             return [
-                'healthy' => false,
-                'error'   => 'DNS Error: Impossibile risolvere il dominio (A/AAAA assente)'
+                'connected'      => false,
+                'protocol'       => null,
+                'cipher'         => null,
+                'days_remaining' => null,
+                'valid_to'       => null,
+                'issuer'         => null,
+                'error'          => $errstr !== '' ? $errstr : 'Handshake TLS fallito o porta 443 filtrata',
             ];
         }
 
-        // 2. Perform cURL request (Try HTTPS first, fallback to HTTP)
+        // Imposta timeout di lettura sul socket per evitare blocchi sulla negoziazione crypto
+        stream_set_timeout($client, (int)ceil($timeout));
+
+        // 1. Estrazione del protocollo reale (TLSv1.3, TLSv1.2, ecc.) e del cifrario
+        $meta = stream_get_meta_data($client);
+        $cryptoInfo = $meta['crypto'] ?? [];
+        $protocol = $cryptoInfo['protocol'] ?? null;
+        $cipher   = $cryptoInfo['cipher_name'] ?? null;
+
+        // 2. Estrazione e parsing del certificato X.509
+        $params = stream_context_get_params($client);
+        fclose($client);
+
+        $peerCert = $params['options']['ssl']['peer_certificate'] ?? null;
+        $daysRemaining = null;
+        $validTo = null;
+        $issuer = null;
+
+        if ($peerCert) {
+            $certDetails = openssl_x509_parse($peerCert);
+            if ($certDetails && isset($certDetails['validTo_time_t'])) {
+                $validToTimestamp = (int)$certDetails['validTo_time_t'];
+                $daysRemaining = (int)floor(($validToTimestamp - time()) / 86400);
+                $validTo = date('Y-m-d H:i:s', $validToTimestamp);
+                $issuer = $certDetails['issuer']['O'] ?? $certDetails['issuer']['CN'] ?? 'Sconosciuto';
+            }
+        }
+
+        return [
+            'connected'      => true,
+            'protocol'       => $protocol,
+            'cipher'         => $cipher,
+            'days_remaining' => $daysRemaining,
+            'valid_to'       => $validTo,
+            'issuer'         => $issuer,
+            'error'          => null,
+        ];
+    }
+
+    /**
+     * Verifica l'accettazione effettiva ed esclusiva dei protocolli deprecati TLS 1.0 e 1.1.
+     *
+     * @param string $domain Dominio dell'ente
+     * @param int $port Porta TLS (default 443)
+     * @param float $timeout Timeout per ciascun tentativo
+     * @return array{deprecated_supported: array<string>, check_errors: array<string>}
+     */
+    function probeDeprecatedTls(string $domain, int $port = 443, float $timeout = 2.5): array
+    {
+        $deprecatedTargets = [
+            'TLSv1.0' => STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT,
+            'TLSv1.1' => STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT,
+        ];
+
+        $supported = [];
+        $errors = [];
+
+        // Contesto SSL con SECLEVEL=0 per impedire a OpenSSL 3 di bloccare il test sul client
+        $sslOptions = [
+            'ssl' => [
+                'verify_peer'       => false,
+                'verify_peer_name'  => false,
+                'allow_self_signed' => true,
+                'SNI_enabled'       => true,
+                'peer_name'         => $domain,
+                'ciphers'           => 'DEFAULT:@SECLEVEL=0',
+            ]
+        ];
+
+        foreach ($deprecatedTargets as $name => $cryptoMethod) {
+            $ctx = stream_context_create($sslOptions);
+            $errno = 0;
+            $errstr = '';
+
+            // 1. Apri la socket TCP in chiaro senza handshake immediato
+            $fp = @stream_socket_client(
+                "tcp://{$domain}:{$port}",
+                $errno,
+                $errstr,
+                $timeout,
+                STREAM_CLIENT_CONNECT,
+                $ctx
+            );
+
+            if (!$fp) {
+                $errors[$name] = "TCP fallito: " . ($errstr ?: 'Timeout');
+                continue;
+            }
+
+            stream_set_timeout($fp, (int)ceil($timeout));
+
+            // 2. Tenta l'handshake vincolando ESCLUSIVAMENTE la versione testata
+            $handshakeSuccess = @stream_socket_enable_crypto($fp, true, $cryptoMethod);
+            fclose($fp);
+
+            if ($handshakeSuccess === true) {
+                // Il server ha accettato la negoziazione su questa specifica versione obsoleta
+                $supported[] = $name;
+            }
+        }
+
+        return [
+            'deprecated_supported' => $supported,
+            'check_errors'         => $errors,
+        ];
+    }
+
+    /**
+     * Esegue il check di disponibilità web, stato DNS e audit di sicurezza SSL/TLS.
+     *
+     * @param string $domain Dominio istituzionale (es. comune.roma.it)
+     * @return array{
+     *     healthy: bool,
+     *     http_code?: int,
+     *     protocol?: string,
+     *     error: ?string,
+     *     tls: ?array
+     * }
+     */
+    function checkWebsiteHealth(string $domain): array
+    {
+        // 1. Risoluzione DNS A / AAAA (con bitwise OR corretto)
+        $dnsRecords = @dns_get_record($domain, DNS_A | DNS_AAAA);
+        if (empty($dnsRecords)) {
+            return [
+                'healthy' => false,
+                'error'   => 'DNS Error: Impossibile risolvere il dominio (record A/AAAA assenti)',
+                'tls'     => null,
+            ];
+        }
+
+        // 2. Controllo disponibilità HTTP/HTTPS
         $urlsToTry = ['https://' . $domain, 'http://' . $domain];
         $lastError = null;
 
@@ -149,23 +340,24 @@ try {
             curl_setopt_array($ch, [
                 CURLOPT_URL            => $targetUrl,
                 CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_NOBODY         => true, // HEAD request
+                CURLOPT_NOBODY         => true,
                 CURLOPT_FOLLOWLOCATION => true,
                 CURLOPT_MAXREDIRS      => 5,
-                CURLOPT_TIMEOUT        => 12,
-                CURLOPT_CONNECTTIMEOUT => 6,
-                CURLOPT_USERAGENT      => BOT_USER_AGENT,
+                CURLOPT_TIMEOUT        => 10,
+                CURLOPT_CONNECTTIMEOUT => 5,
+                CURLOPT_USERAGENT      => defined('BOT_USER_AGENT') ? BOT_USER_AGENT : 'FaroPA-Bot/1.0',
                 CURLOPT_SSL_VERIFYPEER => true,
                 CURLOPT_SSL_VERIFYHOST => 2,
             ]);
 
             curl_exec($ch);
-            $httpCode  = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-            $curlErrNo = curl_errno($ch);
-            $curlError = curl_error($ch);
+            $httpCode      = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            $curlErrNo     = curl_errno($ch);
+            $curlError     = curl_error($ch);
+            $primaryScheme = (string)parse_url($targetUrl, PHP_URL_SCHEME);
             curl_close($ch);
 
-            // Safe SSL Error Detection
+            // Rilevamento errori SSL/TLS nativi
             $isSslError = (
                 (defined('CURLE_SSL_CONNECT_ERROR') && $curlErrNo === CURLE_SSL_CONNECT_ERROR) ||
                 in_array($curlErrNo, [35, 51, 58, 59, 60, 77, 83], true) ||
@@ -174,33 +366,101 @@ try {
             );
 
             if ($isSslError) {
+                // Estrae comunque i metadati del certificato scaduto/invalido via socket permissivo
+                $tlsInfo = inspectTlsConnection($domain, 443, 3);
+
                 return [
                     'healthy' => false,
-                    'error'   => 'Errore Certificato SSL/TLS non valido o scaduto'
+                    'error'   => 'Errore Certificato SSL/TLS non valido o scaduto: ' . ($curlError !== '' ? $curlError : 'Handshake rifiutato'),
+                    'tls'     => [
+                        'score'                => 0,
+                        'negotiated_version'   => $tlsInfo['protocol'],
+                        'cipher'               => $tlsInfo['cipher'],
+                        'days_remaining'       => $tlsInfo['days_remaining'],
+                        'valid_to'             => $tlsInfo['valid_to'],
+                        'issuer'               => $tlsInfo['issuer'],
+                        'deprecated_supported' => [],
+                        'tags'                 => ['ssl_invalid_or_expired'],
+                    ],
                 ];
             }
 
-            // HTTP 2xx or 3xx -> Success
+            // Risposta valida HTTP 2xx o 3xx
             if ($httpCode >= 200 && $httpCode < 400) {
+                $tlsAudit = null;
+
+                if ($primaryScheme === 'https') {
+                    $tlsInfo         = inspectTlsConnection($domain);
+                    $deprecatedProbe = probeDeprecatedTls($domain);
+                    $deprecatedList  = $deprecatedProbe['deprecated_supported'];
+
+                    $tlsScore = 100;
+                    $tlsTags  = [];
+
+                    $negotiated = $tlsInfo['protocol'];
+                    if ($negotiated) {
+                        $tlsTags[] = 'negotiated_' . strtolower(str_replace(['.', ' '], ['_', ''], $negotiated));
+                    }
+
+                    // Penalità per protocolli legacy abilitati
+                    if (in_array('TLSv1.0', $deprecatedList, true)) {
+                        $tlsScore -= 45;
+                        $tlsTags[] = 'deprecated_tls10_enabled';
+                    }
+                    if (in_array('TLSv1.1', $deprecatedList, true)) {
+                        $tlsScore -= 25;
+                        $tlsTags[] = 'deprecated_tls11_enabled';
+                    }
+
+                    // Penalità e tag sullo stato del certificato
+                    if ($tlsInfo['days_remaining'] !== null) {
+                        if ($tlsInfo['days_remaining'] < 0) {
+                            $tlsScore = 0;
+                            $tlsTags[] = 'ssl_expired';
+                        } elseif ($tlsInfo['days_remaining'] <= 7) {
+                            $tlsScore = max(0, $tlsScore - 20);
+                            $tlsTags[] = 'ssl_expiring_soon';
+                        } elseif ($tlsInfo['days_remaining'] <= 30) {
+                            $tlsTags[] = 'ssl_expiring_soon';
+                        }
+                    }
+
+                    if (empty($deprecatedList) && $negotiated === 'TLSv1.3' && ($tlsInfo['days_remaining'] ?? 0) > 30) {
+                        $tlsTags[] = 'modern_tls_only';
+                    }
+
+                    $tlsAudit = [
+                        'score'                => max(0, $tlsScore),
+                        'negotiated_version'   => $negotiated,
+                        'cipher'               => $tlsInfo['cipher'],
+                        'days_remaining'       => $tlsInfo['days_remaining'],
+                        'valid_to'             => $tlsInfo['valid_to'],
+                        'issuer'               => $tlsInfo['issuer'],
+                        'deprecated_supported' => $deprecatedList,
+                        'tags'                 => array_values(array_unique($tlsTags)),
+                    ];
+                }
+
                 return [
                     'healthy'   => true,
                     'http_code' => $httpCode,
-                    'protocol'  => parse_url($targetUrl, PHP_URL_SCHEME),
-                    'error'     => null
+                    'protocol'  => $primaryScheme,
+                    'error'     => null,
+                    'tls'       => $tlsAudit,
                 ];
             }
 
-            // HTTP 4xx or 5xx -> Explicit server error code
             if ($httpCode >= 400) {
                 $lastError = sprintf('Errore HTTP %d (%s)', $httpCode, $httpCode === 404 ? 'Pagina non trovata' : 'Errore Server');
             } elseif ($curlErrNo > 0) {
-                $lastError = 'Connessione fallita: ' . ($curlError ?: 'Timeout o Host irraggiungibile');
+                $lastError = 'Connessione fallita: ' . ($curlError !== '' ? $curlError : 'Timeout o Host irraggiungibile');
             }
         }
 
         return [
             'healthy' => false,
-            'error'   => $lastError ?? 'Sito web non raggiungibile'
+            'error'   => $lastError ?? 'Sito web non raggiungibile',
+            'tls'     => null,
         ];
     }
 
@@ -506,13 +766,13 @@ try {
     $totalProcessed = 0;
     $healthyCount   = 0;
 
-    // Fetch 10 least recently checked or random entities
+    // Fetch 20 least recently checked or random entities
     $sql = "SELECT Codice_IPA
             FROM Enti
             WHERE LENGTH(Sito_istituzionale) > 1
               AND (Data_controllo IS NULL OR Data_controllo < NOW() - INTERVAL 7 DAY)
             ORDER BY (Data_controllo IS NOT NULL) ASC, Data_controllo ASC
-            LIMIT 10";
+            LIMIT 20";
 
     $stmt = $db->query($sql);
 
@@ -572,12 +832,96 @@ try {
         }
 
         if (!$health['healthy']) {
-            $ente->setTag('validation_error_website', $health['error']);
+            $ente->setTag('validation_error_website', substr($health['error'],0,32));
             $logger?->warning("[{$codiceIpa}] Website Health Check FAILED: {$health['error']}");
+
+            // Se l'errore è un certificato non valido o scaduto, registra lo score zero
+            if (!empty($health['tls'])) {
+                $ente->setTag('tls_security_score', (string)$health['tls']['score']);
+                $ente->setTag('ssl_invalid_or_expired', '1');
+            }
         } else {
             $healthyCount++;
             $ente->setTag('validation_error_website', null);
+            $ente->removeTag('ssl_invalid_or_expired');
             $logger?->info("[{$codiceIpa}] Website Health Check PASSED (HTTP {$health['http_code']})");
+
+            // --- GESTIONE AUDIT TLS E SCORE DI SICUREZZA ---
+            if (!empty($health['tls'])) {
+                $tls = $health['tls'];
+
+                // 1. Metadati primari TLS
+                $ente->setTag('tls_security_score', (string)$tls['score']);
+                if (!empty($tls['negotiated_version'])) {
+                    $ente->setTag('tls_negotiated', (string)$tls['negotiated_version']);
+                }
+
+                // 2. Metadati scadenza e issuer del certificato
+                if ($tls['days_remaining'] !== null) {
+                    $ente->setTag('ssl_days_remaining', (string)$tls['days_remaining']);
+                    $ente->setTag('ssl_valid_to', (string)$tls['valid_to']);
+                    if (!empty($tls['issuer'])) {
+                        $ente->setTag('ssl_issuer', (string)$tls['issuer']);
+                    }
+
+                    // Stato testuale sintattico per filtri e dashboard
+                    if ($tls['days_remaining'] < 0) {
+                        $ente->setTag('ssl_status', 'expired');
+                    } elseif ($tls['days_remaining'] <= 14) {
+                        $ente->setTag('ssl_status', 'expiring_critical');
+                    } elseif ($tls['days_remaining'] <= 30) {
+                        $ente->setTag('ssl_status', 'expiring_warning');
+                    } else {
+                        $ente->setTag('ssl_status', 'valid');
+                    }
+                }
+
+                // 3. Allineamento Tag: protocolli deprecati
+                if (in_array('deprecated_tls10_enabled', $tls['tags'], true)) {
+                    $ente->setTag('deprecated_tls10_enabled', '1');
+                } else {
+                    $ente->removeTag('deprecated_tls10_enabled');
+                }
+
+                if (in_array('deprecated_tls11_enabled', $tls['tags'], true)) {
+                    $ente->setTag('deprecated_tls11_enabled', '1');
+                } else {
+                    $ente->removeTag('deprecated_tls11_enabled');
+                }
+
+                // 4. Allineamento Tag: modernità e scadenze
+                if (in_array('modern_tls_only', $tls['tags'], true)) {
+                    $ente->setTag('modern_tls_only', '1');
+                } else {
+                    $ente->removeTag('modern_tls_only');
+                }
+
+                if (in_array('ssl_expiring_soon', $tls['tags'], true)) {
+                    $ente->setTag('ssl_expiring_soon', '1');
+                } else {
+                    $ente->removeTag('ssl_expiring_soon');
+                }
+
+                $ente->removeTag('insecure_http_only');
+
+                $logger?->info(sprintf(
+                    "[%s] TLS Audit: Score %d/100 | Negoziato: %s | Scadenza: %s gg | Legacy: %s",
+                    $codiceIpa,
+                    $tls['score'],
+                    $tls['negotiated_version'] ?? 'N/D',
+                    $tls['days_remaining'] !== null ? (string)$tls['days_remaining'] : 'N/D',
+                    empty($tls['deprecated_supported']) ? 'Nessuno' : implode(', ', $tls['deprecated_supported'])
+                ));
+            } else {
+                // Il portale non dispone di HTTPS (solo HTTP in chiaro)
+                $ente->setTag('tls_security_score', '0');
+                $ente->setTag('insecure_http_only', '1');
+                $ente->removeTag('deprecated_tls10_enabled');
+                $ente->removeTag('deprecated_tls11_enabled');
+                $ente->removeTag('modern_tls_only');
+                $ente->removeTag('ssl_days_remaining');
+                $ente->removeTag('ssl_status');
+            }
         }
 
         // --- 2. HOSTING PROVIDER CHECK ---
@@ -694,54 +1038,84 @@ try {
 
         // --- 5. SCREENSHOT CAPTURE ---
         if (!empty($resolvedIp) && $resolvedIp !== $domain && $health['healthy']) {
+            $fileName = $codiceIpa . '.jpg';
+            $localTempDir = sys_get_temp_dir() . '/chrome_tmp_'.$codiceIpa .'/'; // Directory temporanea
+            $localTempFile = $localTempDir.$fileName; // File temporaneo dello screenshot
+
+            $targetUrl = 'http://' . $domain;
+            $timeoutSeconds = 15;
+
             try {
-                $fileName  = $codiceIpa . '_' . date('Y-m-d') . '.jpg';
-                $outputDir = __DIR__ . '/../screenshots/';
-                $filePath  = $outputDir . $fileName;
-
-                if (!is_dir($outputDir)) {
-                    mkdir($outputDir, 0755, true);
-                }
-
-                $targetUrl = 'http://' . $domain;
-                $timeoutSeconds = 15;
-
                 // Stable, low-memory Chrome Headless command (Crash-proof for containers/LXC)
                 $cmd = sprintf(
-                    'timeout %d /usr/bin/google-chrome ' .
-                    '--headless=new ' .
-                    '--no-sandbox ' .
-                    '--disable-setuid-sandbox ' .
-                    '--disable-dev-shm-usage ' .
-                    '--no-zygote ' .
-                    '--renderer-process-limit=1 ' .
-                    '--disable-gpu ' .
-                    '--disable-software-rasterizer ' .
-                    '--disable-extensions ' .
-                    '--disable-crash-reporter ' .
-                    '--disable-breakpad ' .
-                    '--disable-background-networking ' .
-                    '--disable-sync ' .
-                    '--disable-translate ' .
-                    '--js-flags="--max-old-space-size=128" ' .
-                    '--window-size=1280,800 ' .
-                    '--hide-scrollbars ' .
-                    '--screenshot=%s %s 2>&1',
-                    $timeoutSeconds,
-                    escapeshellarg($filePath),
-                    escapeshellarg($targetUrl)
-                );
+                        'timeout %d /usr/bin/google-chrome ' .
+                        '--headless=new ' .
+                        '--no-sandbox ' .
+                        '--disable-setuid-sandbox ' .
+                        '--disable-dev-shm-usage ' .
+                        '--no-zygote ' .
+                        '--renderer-process-limit=1 ' .
+                        '--disable-gpu ' .
+                        '--disable-software-rasterizer ' .
+                        '--disable-extensions ' .
+                        '--disable-crash-reporter ' .
+                        '--disable-breakpad ' .
+                        '--disable-background-networking ' .
+                        '--disable-sync ' .
+                        '--disable-translate ' .
+                        '--disable-application-cache ' .
+                        '--disk-cache-size=1 ' .
+                        '--media-cache-size=1 ' .
+                        '--user-data-dir=%s ' .
+                        '--data-path=%s ' .
+                        '--disk-cache-dir=%s/cache ' .
+                        '--js-flags="--max-old-space-size=128" ' .
+                        '--window-size=1280,800 ' .
+                        '--hide-scrollbars ' .
+                        '--screenshot=%s %s 2>&1',
+                        $timeoutSeconds,
+                        escapeshellarg($localTempDir),
+                        escapeshellarg($localTempDir),
+                        escapeshellarg($localTempDir),
+                        escapeshellarg($localTempFile),
+                        escapeshellarg($targetUrl)
+                    );
 
                 exec($cmd, $outputLines, $returnCode);
 
-                if ($returnCode === 0 && file_exists($filePath) && filesize($filePath) > 0) {
-                    $ente->setTag('screenshot', $fileName);
-                    $ente->setTag('screenshot_ts', date('Y-m-d'));
-                    $logger?->info("[{$codiceIpa}] Screenshot completed: {$fileName}");
+                if ($returnCode === 0 && file_exists($localTempFile) && filesize($localTempFile) > 0) {
+                    $remoteKey     = 'screenshots/' . $fileName;
+
+                    try {
+                        // Upload con sovrascrittura diretta
+                        $result = $s3->putObject([
+                            'Bucket'      => $r2Config['bucketName'],
+                            'Key'         => $remoteKey,
+                            'SourceFile'  => $localTempFile,
+                            'ContentType' => 'image/jpeg',
+                            'CacheControl'=> 'public, max-age=86400', // Cache 24h nel browser
+                        ]);
+
+                        $httpStatus = (int)($result['@metadata']['statusCode'] ?? 0);
+                        $etag = trim((string)($result['ETag'] ?? ''), '"');
+
+                        if ($httpStatus === 200) {
+                            // Upload confermato: possiamo eliminare il file temporaneo locale
+                            @unlink($localTempFile);
+
+                            $ente->setTag('screenshot', $fileName);
+                            $ente->setTag('screenshot_ts', date('Y-m-d H:i:s'));
+                            $ente->setTag('screenshot_etag', $etag); // Utile opzionalmente come checksum
+
+                            $logger?->info("[{$codiceIpa}] Screenshot done and uploaded (ETag: {$etag})");
+                        }
+                    } catch (\Aws\Exception\AwsException $e) {
+                        $logger?->error("[{$codiceIpa}] Error while upload to R2: " . $e->getAwsErrorMessage() . " (HTTP " . $e->getStatusCode() . ")");
+                    }
                 } else {
                     $errorDetails = implode(' ', $outputLines);
                     $logger?->warning("[{$codiceIpa}] Screenshot failed or timed out (Exit Code {$returnCode}): {$errorDetails}");
-                    $ente->setTag('screenshot', 'none.jpg');
+                    $ente->setTag('screenshot', '');
                 }
 
             } catch (Throwable $e) {
@@ -749,6 +1123,10 @@ try {
                 $ente->setTag('screenshot', 'none.jpg');
             } finally {
                 @shell_exec('pkill -f -9 "google-chrome.*--headless" 2>/dev/null');
+                // 3. Rimozione forzata della directory temporanea (anche se timeout ha ucciso Chrome)
+                if (is_dir($localTempDir)) {
+                    exec('rm -rf ' . escapeshellarg($localTempDir));
+                }
             }
         } else {
             $logger?->warning("[{$codiceIpa}] Domain host does not resolve or site is offline. Skipping screenshot.");
@@ -785,13 +1163,44 @@ try {
                             $detectedPlugins = $site['plugins'] ?? [];
 
                             // 1. Titolo della Pagina
-                            $pageTitle = $detectedPlugins['Title']['string'][0] ?? null;
-                            if ($pageTitle) {
-                                $oldTitle = $ente->getTag('website_title');
-                                if ($pageTitle !== $oldTitle) {
-                                    logStateChange($db, $codiceIpa, 'title_change', $oldTitle, (string)$pageTitle);
+                            $rawTitle = $detectedPlugins['Title']['string'] ?? null;
+
+                            if (is_array($rawTitle)) {
+                                $rawTitle = end($rawTitle);
+                            }
+
+                            $pageTitle = null;
+
+                            if (!empty($rawTitle)) {
+                                $title = (string)$rawTitle;
+
+                                // Decodifica entità HTML (anche ricorsiva per gestire doppie codifiche)
+                                do {
+                                    $prev = $title;
+                                    $title = html_entity_decode($title, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                                } while ($title !== $prev && str_contains($title, '&'));
+
+                                // Rimuove ritorni a capo/tabulazioni e collassa spazi multipli
+                                $title = trim(preg_replace('/\s+/', ' ', $title));
+
+                                // Rimuove eventuali tag HTML residui non chiusi o iniettati
+                                $title = strip_tags($title);
+
+                                if (in_array($title, ['—', '–', '-', '|', '::', '/'], true)) {
+                                    $pageTitle = null; // Il sito non espone un vero titolo
+                                } else if ($title !== '') {
+                                    $pageTitle = $title;
+                                } else {
+                                    $pageTitle = null;
                                 }
-                                $ente->setTag('website_title', (string)$pageTitle);
+                            }
+
+                            if ($pageTitle !== null) {
+                                $oldTitle = $ente->getTag('website_title');
+                                if ($oldTitle !== null && $oldTitle !== '' && $pageTitle !== $oldTitle) {
+                                    logStateChange($db, $codiceIpa, 'title_change', $oldTitle, $pageTitle);
+                                }
+                                $ente->setTag('website_title', $pageTitle);
                             }
 
                             // 2. Email di contatto dal sito

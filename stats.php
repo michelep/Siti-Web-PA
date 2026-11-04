@@ -18,6 +18,64 @@ $db = Database::getInstance();
 $totaleEnti = (int)$db->query("SELECT COUNT(*) FROM Enti")->fetchColumn();
 $totaleSiti = (int)$db->query("SELECT COUNT(*) FROM Enti WHERE LENGTH(Sito_istituzionale) > 1")->fetchColumn();
 
+/// 1. Estrazione dei conteggi aggregati per Codice_categoria
+$stmtCat = $db->query("
+    SELECT
+        COALESCE(Codice_categoria, '') AS codice_cat,
+        COUNT(*) AS totale
+    FROM Enti
+    WHERE LENGTH(Sito_istituzionale) > 1
+    GROUP BY COALESCE(Codice_categoria, '')
+");
+$rawCategoryCounts = $stmtCat->fetchAll(PDO::FETCH_ASSOC);
+
+// 2. Raggruppamento dinamico nelle macro-categorie tramite mapCodiceCategoria()
+$aggregatedTypes = [];
+$totaleEntiCategorizzati = 0;
+
+foreach ($rawCategoryCounts as $row) {
+    $code  = (string)$row['codice_cat'];
+    $count = (int)$row['totale'];
+    $totaleEntiCategorizzati += $count;
+
+    // Richiama la funzione di mappatura per ottenere slug, label, icona e badge
+    $meta = mapCodiceCategoria($code);
+    $slug = $meta['slug'];
+
+    if (!isset($aggregatedTypes[$slug])) {
+        $aggregatedTypes[$slug] = [
+            'slug'        => $slug,
+            'label'       => $meta['label'],
+            'icon'        => $meta['icon'],
+            'badge_class' => $meta['badge_class'],
+            'codes'       => [],
+            'count'       => 0,
+        ];
+    }
+
+    $aggregatedTypes[$slug]['count'] += $count;
+    if ($code !== '') {
+        $aggregatedTypes[$slug]['codes'][] = $code;
+    }
+}
+
+// Ordina le categorie per numero decrescente di enti
+uasort($aggregatedTypes, fn($a, $b) => $b['count'] <=> $a['count']);
+
+// Mappa colore barra di avanzamento coerente con i badge
+$barColors = [
+    'comune'               => 'bg-primary',
+    'scuola'               => 'bg-success',
+    'ordine_professionale' => 'bg-warning',
+    'sanita'               => 'bg-danger',
+    'provincia'            => 'bg-info',
+    'regione'              => 'bg-dark',
+    'universita'           => 'bg-warning',
+    'cciaa'                => 'bg-secondary',
+    'centrale'             => 'bg-dark',
+    'gestore_servizi'      => 'bg-secondary',
+    'altro'                => 'bg-secondary',
+];
 // Helper per estrarre conteggi aggregati per chiave metadato (da tabella Enti_Tags o equivalente)
 function getAggregateTagStats(PDO $db, string $tagKey, int $limit = 10): array
 {
@@ -65,6 +123,51 @@ foreach ($secKeys as $k => $label) {
     ];
 }
 
+// 1. Perimetro complessivo
+$stmtTot = $db->query("SELECT COUNT(*) FROM Enti WHERE LENGTH(Sito_istituzionale) > 1");
+$totaleTarget = (int)$stmtTot->fetchColumn();
+
+// 2. Enti analizzati nell'attuale ciclo (es. ultimi 7 giorni)
+$stmtScan = $db->query("
+    SELECT COUNT(*)
+    FROM Enti
+    WHERE LENGTH(Sito_istituzionale) > 1
+      AND Data_controllo >= NOW() - INTERVAL 7 DAY
+");
+$scansionatiNelCiclo = (int)$stmtScan->fetchColumn();
+
+// 3. Velocità reale: quanti enti sono stati scansionati nell'ultima ora (60 min)
+$stmtRate = $db->query("
+    SELECT COUNT(*)
+    FROM Enti
+    WHERE LENGTH(Sito_istituzionale) > 1
+      AND Data_controllo >= NOW() - INTERVAL 1 HOUR
+");
+$ritmoOrarioReale = (int)$stmtRate->fetchColumn();
+
+// Calcolo avanzamento percentuale
+$percentualeProgresso = $totaleTarget > 0 ? round(($scansionatiNelCiclo / $totaleTarget) * 100, 1) : 0;
+if ($percentualeProgresso > 100) {
+    $percentualeProgresso = 100;
+}
+
+// Calcolo tempo stimato di completamento (ETA)
+$entiMancanti = max(0, $totaleTarget - $scansionatiNelCiclo);
+$stimaOre     = null;
+$etaTesto     = 'In calcolo...';
+
+if ($ritmoOrarioReale > 0 && $entiMancanti > 0) {
+    $stimaOre = (int)ceil($entiMancanti / $ritmoOrarioReale);
+    if ($stimaOre < 24) {
+        $etaTesto = "~{$stimaOre} ore";
+    } else {
+        $giorni = round($stimaOre / 24, 1);
+        $etaTesto = "~{$giorni} giorni";
+    }
+} elseif ($entiMancanti === 0) {
+    $etaTesto = 'Ciclo completato';
+}
+
 require_once __DIR__ . '/header.inc.php';
 ?>
 
@@ -84,7 +187,122 @@ require_once __DIR__ . '/header.inc.php';
         </div>
     </div>
 
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between mb-2">
+                <div>
+                    <h6 class="fw-bold mb-1 text-dark d-flex align-items-center gap-2">
+                        <span class="spinner-grow spinner-grow-sm text-primary" role="status" aria-hidden="true"></span>
+                        Progressione Ciclo di Scansione
+                    </h6>
+                    <p class="text-muted small mb-0">
+                        Avanzamento del monitoraggio continuo dell'infrastruttura sui siti della PA.
+                    </p>
+                </div>
+                <div class="text-end mt-2 mt-md-0 d-flex align-items-center gap-2">
+                    <span class="badge bg-light text-dark border px-2 py-1 small" title="Velocità calcolata sugli ultimi 60 minuti">
+                        <i class="bi bi-speedometer text-info me-1"></i><strong><?= number_format($ritmoOrarioReale, 0, ',', '.') ?></strong> enti/ora
+                    </span>
+                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle fs-6 px-3 py-1 fw-bold">
+                        <?= number_format($percentualeProgresso, 1, ',', '.') ?>%
+                    </span>
+                </div>
+            </div>
+
+            <!-- BARRA PROGRESSO ANIMATA -->
+            <div class="progress" style="height: 12px; background-color: #e9ecef;" role="progressbar"
+                 aria-valuenow="<?= $percentualeProgresso ?>" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+                     style="width: <?= $percentualeProgresso ?>%;"></div>
+            </div>
+
+            <!-- DETTAGLI DINAMICI -->
+            <div class="d-flex flex-wrap justify-content-between text-muted small mt-2 pt-1 border-top border-light">
+                <div>
+                    <i class="bi bi-check2-circle text-success me-1"></i>
+                    Completati: <strong><?= number_format($scansionatiNelCiclo, 0, ',', '.') ?></strong>
+                </div>
+                <div>
+                    <i class="bi bi-hourglass-split text-warning me-1"></i>
+                    Rimanenti: <strong><?= number_format($entiMancanti, 0, ',', '.') ?></strong>
+                </div>
+                <div>
+                    <i class="bi bi-clock-history text-primary me-1"></i>
+                    Fine ciclo stimata: <strong><?= $etaTesto ?></strong>
+                </div>
+                <div>
+                    <i class="bi bi-collection me-1"></i>
+                    Target totale: <strong><?= number_format($totaleTarget, 0, ',', '.') ?></strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="row g-4">
+        <!-- TABELLA DISTRIBUZIONE PER TIPOLOGIA ENTE -->
+        <div class="col-12 mb-4">
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white border-bottom py-3 d-flex align-items-center justify-content-between">
+                    <div>
+                        <h6 class="fw-bold mb-0 text-dark">
+                            <i class="bi bi-diagram-2 text-primary me-2"></i>Distribuzione Censimento per Tipologia di Ente
+                        </h6>
+                        <small class="text-muted">Ripartizione del perimetro monitorato in base al campo <code>Codice_categoria</code> di IndicePA.</small>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="ps-3" style="width: 280px;">Tipologia Ente</th>
+                                    <th>Codici IPA Associati</th>
+                                    <th class="text-end" style="width: 140px;">Enti Monitorati</th>
+                                    <th class="text-end pe-3" style="width: 35%;">Percentuale sul Totale</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (!empty($aggregatedTypes)): ?>
+                                    <?php foreach ($aggregatedTypes as $slug => $data):
+                                        $cnt = $data['count'];
+                                        $pct = $totaleEntiCategorizzati > 0 ? ($cnt / $totaleEntiCategorizzati) * 100 : 0;
+                                        $barClass = $barColors[$slug] ?? 'bg-secondary';
+                                        $codiciStr = !empty($data['codes']) ? implode(', ', array_unique($data['codes'])) : 'N.D.';
+                                    ?>
+                                        <tr>
+                                            <td class="ps-3">
+                                                <span class="badge <?= $data['badge_class'] ?> px-2 py-1">
+                                                    <i class="bi <?= $data['icon'] ?> me-1"></i><?= htmlspecialchars($data['label'], ENT_QUOTES, 'UTF-8') ?>
+                                                </span>
+                                            </td>
+                                            <td class="text-muted small">
+                                                Codici IPA: <code><?= htmlspecialchars($codiciStr, ENT_QUOTES, 'UTF-8') ?></code>
+                                            </td>
+                                            <td class="text-end fw-semibold text-dark">
+                                                <?= number_format($cnt, 0, ',', '.') ?>
+                                            </td>
+                                            <td class="text-end pe-3">
+                                                <div class="d-flex align-items-center justify-content-end gap-2">
+                                                    <div class="progress flex-grow-1" style="height: 8px;">
+                                                        <div class="progress-bar <?= $barClass ?>" role="progressbar" style="width: <?= round($pct, 1) ?>%;"></div>
+                                                    </div>
+                                                    <span class="small fw-bold" style="min-width: 48px;"><?= number_format($pct, 1, ',', '.') ?>%</span>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <tr>
+                                        <td colspan="4" class="text-center text-muted py-4">Nessun dato di categoria censito.</td>
+                                    </tr>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- 1. TABELLA HOSTING & CLOUD PROVIDER -->
         <div class="col-lg-6">
             <div class="card border-0 shadow-sm h-100">
