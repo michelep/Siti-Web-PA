@@ -309,30 +309,57 @@ try {
 
     /**
      * Esegue il check di disponibilità web, stato DNS e audit di sicurezza SSL/TLS.
+     * Gestisce zone DNS prive di record A/AAAA effettuando il fallback su sottodomini standard (es. www).
      *
      * @param string $domain Dominio istituzionale (es. comune.roma.it)
      * @return array{
      *     healthy: bool,
      *     http_code?: int,
      *     protocol?: string,
+     *     resolved_domain?: string,
      *     error: ?string,
      *     tls: ?array
      * }
      */
     function checkWebsiteHealth(string $domain): array
     {
-        // 1. Risoluzione DNS A / AAAA (con bitwise OR corretto)
-        $dnsRecords = @dns_get_record($domain, DNS_A | DNS_AAAA);
-        if (empty($dnsRecords)) {
+        // Normalizzazione iniziale: rimuove protocolli accidentali o slash finali
+        $cleanDomain = strtolower(trim($domain));
+        $cleanDomain = (string)preg_replace('#^https?://#i', '', $cleanDomain);
+        $cleanDomain = rtrim($cleanDomain, '/');
+
+        // 1. Individuazione dei candidati host (Gestione zone DNS / fallback WWW)
+        $candidateHosts = [$cleanDomain];
+        if (str_starts_with($cleanDomain, 'www.')) {
+            $candidateHosts[] = substr($cleanDomain, 4); // Fallback: apex senza www
+        } else {
+            $candidateHosts[] = 'www.' . $cleanDomain;   // Fallback: sottodominio www
+        }
+
+        $activeHost = null;
+        $dnsResolved = false;
+
+        // 2. Risoluzione DNS A / AAAA / CNAME
+        foreach ($candidateHosts as $hostCandidate) {
+            $dnsRecords = @dns_get_record($hostCandidate, DNS_A | DNS_AAAA | DNS_CNAME);
+            if (!empty($dnsRecords)) {
+                $activeHost  = $hostCandidate;
+                $dnsResolved = true;
+                break;
+            }
+        }
+
+        if (!$dnsResolved || $activeHost === null) {
             return [
-                'healthy' => false,
-                'error'   => 'DNS Error: Impossibile risolvere il dominio (record A/AAAA assenti)',
-                'tls'     => null,
+                'healthy'         => false,
+                'resolved_domain' => $cleanDomain,
+                'error'           => "DNS Error: Nessun record A/AAAA/CNAME trovato per '{$cleanDomain}' né per i sottodomini standard",
+                'tls'             => null,
             ];
         }
 
-        // 2. Controllo disponibilità HTTP/HTTPS
-        $urlsToTry = ['https://' . $domain, 'http://' . $domain];
+        // 3. Controllo disponibilità HTTP/HTTPS sull'host risolto
+        $urlsToTry = ['https://' . $activeHost, 'http://' . $activeHost];
         $lastError = null;
 
         foreach ($urlsToTry as $targetUrl) {
@@ -354,8 +381,13 @@ try {
             $httpCode      = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
             $curlErrNo     = curl_errno($ch);
             $curlError     = curl_error($ch);
+            $effectiveUrl  = (string)curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
             $primaryScheme = (string)parse_url($targetUrl, PHP_URL_SCHEME);
             curl_close($ch);
+
+            // Se cURL ha seguito redirect, aggiorna l'host finale per l'ispezione SSL
+            $effectiveHost = parse_url($effectiveUrl, PHP_URL_HOST);
+            $targetHostForTls = (!empty($effectiveHost) && is_string($effectiveHost)) ? $effectiveHost : $activeHost;
 
             // Rilevamento errori SSL/TLS nativi
             $isSslError = (
@@ -366,13 +398,14 @@ try {
             );
 
             if ($isSslError) {
-                // Estrae comunque i metadati del certificato scaduto/invalido via socket permissivo
-                $tlsInfo = inspectTlsConnection($domain, 443, 3);
+                // Ispezione socket permissiva per estrarre metadati e scadenza anche su cert non valido
+                $tlsInfo = inspectTlsConnection($targetHostForTls, 443, 3);
 
                 return [
-                    'healthy' => false,
-                    'error'   => 'Errore Certificato SSL/TLS non valido o scaduto: ' . ($curlError !== '' ? $curlError : 'Handshake rifiutato'),
-                    'tls'     => [
+                    'healthy'         => false,
+                    'resolved_domain' => $targetHostForTls,
+                    'error'           => 'Errore Certificato SSL/TLS non valido o scaduto: ' . ($curlError !== '' ? $curlError : 'Handshake rifiutato'),
+                    'tls'             => [
                         'score'                => 0,
                         'negotiated_version'   => $tlsInfo['protocol'],
                         'cipher'               => $tlsInfo['cipher'],
@@ -389,9 +422,9 @@ try {
             if ($httpCode >= 200 && $httpCode < 400) {
                 $tlsAudit = null;
 
-                if ($primaryScheme === 'https') {
-                    $tlsInfo         = inspectTlsConnection($domain);
-                    $deprecatedProbe = probeDeprecatedTls($domain);
+                if ($primaryScheme === 'https' || parse_url($effectiveUrl, PHP_URL_SCHEME) === 'https') {
+                    $tlsInfo         = inspectTlsConnection($targetHostForTls);
+                    $deprecatedProbe = probeDeprecatedTls($targetHostForTls);
                     $deprecatedList  = $deprecatedProbe['deprecated_supported'];
 
                     $tlsScore = 100;
@@ -402,7 +435,7 @@ try {
                         $tlsTags[] = 'negotiated_' . strtolower(str_replace(['.', ' '], ['_', ''], $negotiated));
                     }
 
-                    // Penalità per protocolli legacy abilitati
+                    // Penalità per protocolli legacy attivi
                     if (in_array('TLSv1.0', $deprecatedList, true)) {
                         $tlsScore -= 45;
                         $tlsTags[] = 'deprecated_tls10_enabled';
@@ -442,25 +475,27 @@ try {
                 }
 
                 return [
-                    'healthy'   => true,
-                    'http_code' => $httpCode,
-                    'protocol'  => $primaryScheme,
-                    'error'     => null,
-                    'tls'       => $tlsAudit,
+                    'healthy'         => true,
+                    'http_code'       => $httpCode,
+                    'protocol'        => $primaryScheme,
+                    'resolved_domain' => $targetHostForTls,
+                    'error'           => null,
+                    'tls'             => $tlsAudit,
                 ];
             }
 
             if ($httpCode >= 400) {
                 $lastError = sprintf('Errore HTTP %d (%s)', $httpCode, $httpCode === 404 ? 'Pagina non trovata' : 'Errore Server');
             } elseif ($curlErrNo > 0) {
-                $lastError = 'Connessione fallita: ' . ($curlError !== '' ? $curlError : 'Timeout o Host irraggiungibile');
+                $lastError = 'Connessione fallita su ' . $activeHost . ': ' . ($curlError !== '' ? $curlError : 'Timeout o Host irraggiungibile');
             }
         }
 
         return [
-            'healthy' => false,
-            'error'   => $lastError ?? 'Sito web non raggiungibile',
-            'tls'     => null,
+            'healthy'         => false,
+            'resolved_domain' => $activeHost,
+            'error'           => $lastError ?? 'Sito web non raggiungibile',
+            'tls'             => null,
         ];
     }
 
@@ -819,6 +854,16 @@ try {
 
         // --- 1. RUNTIME WEBSITE & SSL HEALTH CHECK ---
         $health   = checkWebsiteHealth($domain);
+
+        if ($health['healthy']) {
+            $workingDomain = $health['resolved_domain']; // Es: www.comune.esempio.it anziché comune.esempio.it
+
+            if ($workingDomain !== $domain) {
+                $ente->setTag('effective_web_domain', $workingDomain);
+                $logger?->info("[{$codiceIpa}] Dominio zona risolto tramite fallback: {$workingDomain}");
+            }
+        }
+
         $newError = !$health['healthy'] ? $health['error'] : null;
 
         if ($oldError !== $newError) {
@@ -924,20 +969,22 @@ try {
             }
         }
 
-        // --- 2. HOSTING PROVIDER CHECK ---
-        $resolvedIp = gethostbyname($domain);
-        if (!empty($resolvedIp) && $resolvedIp !== $domain) {
-            try {
-                $newHosting = getHostingInfo($resolvedIp);
-                if ($newHosting) {
-                    if ($newHosting !== $oldHosting) {
-                        logStateChange($db, $codiceIpa, 'hosting_change', $oldHosting, $newHosting);
+        if ($health['healthy']) {
+            // --- 2. HOSTING PROVIDER CHECK ---
+            $resolvedIp = gethostbyname($workingDomain);
+            if (!empty($resolvedIp) && $resolvedIp !== $workingDomain) {
+                try {
+                    $newHosting = getHostingInfo($resolvedIp);
+                    if ($newHosting) {
+                        if ($newHosting !== $oldHosting) {
+                            logStateChange($db, $codiceIpa, 'hosting_change', $oldHosting, $newHosting);
+                        }
+                        $ente->setTag('hosting_provider', $newHosting);
+                        $logger?->info("[{$codiceIpa}] Hosting detected: {$newHosting} (IP: {$resolvedIp})");
                     }
-                    $ente->setTag('hosting_provider', $newHosting);
-                    $logger?->info("[{$codiceIpa}] Hosting detected: {$newHosting} (IP: {$resolvedIp})");
+                } catch (Throwable $e) {
+                    $logger?->error("[{$codiceIpa}] Hosting check error: " . $e->getMessage());
                 }
-            } catch (Throwable $e) {
-                $logger?->error("[{$codiceIpa}] Hosting check error: " . $e->getMessage());
             }
         }
 
@@ -1036,100 +1083,105 @@ try {
             $logger?->warning("[{$codiceIpa}] No subdomains found.");
         }
 
-        // --- 5. SCREENSHOT CAPTURE ---
-        if (!empty($resolvedIp) && $resolvedIp !== $domain && $health['healthy']) {
-            $fileName = $codiceIpa . '.jpg';
-            $localTempDir = sys_get_temp_dir() . '/chrome_tmp_'.$codiceIpa .'/'; // Directory temporanea
-            $localTempFile = $localTempDir.$fileName; // File temporaneo dello screenshot
+        if ($health['healthy']) {
+            // --- 5. SCREENSHOT CAPTURE ---
+            if (!empty($resolvedIp) && $resolvedIp !== $workingDomain) {
+                $fileName = $codiceIpa . '.jpg';
+                $localTempDir = sys_get_temp_dir() . '/chrome_tmp_'.$codiceIpa .'/'; // Directory temporanea
+                $localTempFile = $localTempDir.$fileName; // File temporaneo dello screenshot
 
-            $targetUrl = 'http://' . $domain;
-            $timeoutSeconds = 15;
+                $targetUrl = 'http://' . $workingDomain;
+                $timeoutSeconds = 15;
 
-            try {
-                // Stable, low-memory Chrome Headless command (Crash-proof for containers/LXC)
-                $cmd = sprintf(
-                        'timeout %d /usr/bin/google-chrome ' .
-                        '--headless=new ' .
-                        '--no-sandbox ' .
-                        '--disable-setuid-sandbox ' .
-                        '--disable-dev-shm-usage ' .
-                        '--no-zygote ' .
-                        '--renderer-process-limit=1 ' .
-                        '--disable-gpu ' .
-                        '--disable-software-rasterizer ' .
-                        '--disable-extensions ' .
-                        '--disable-crash-reporter ' .
-                        '--disable-breakpad ' .
-                        '--disable-background-networking ' .
-                        '--disable-sync ' .
-                        '--disable-translate ' .
-                        '--disable-application-cache ' .
-                        '--disk-cache-size=1 ' .
-                        '--media-cache-size=1 ' .
-                        '--user-data-dir=%s ' .
-                        '--data-path=%s ' .
-                        '--disk-cache-dir=%s/cache ' .
-                        '--js-flags="--max-old-space-size=128" ' .
-                        '--window-size=1280,800 ' .
-                        '--hide-scrollbars ' .
-                        '--screenshot=%s %s 2>&1',
-                        $timeoutSeconds,
-                        escapeshellarg($localTempDir),
-                        escapeshellarg($localTempDir),
-                        escapeshellarg($localTempDir),
-                        escapeshellarg($localTempFile),
-                        escapeshellarg($targetUrl)
-                    );
+                try {
+                    // Stable, low-memory Chrome Headless command (Crash-proof for containers/LXC)
+                    $cmd = sprintf(
+                            'timeout %d /usr/bin/google-chrome ' .
+                            '--headless=new ' .
+                            '--no-sandbox ' .
+                            '--disable-setuid-sandbox ' .
+                            '--disable-dev-shm-usage ' .
+                            '--no-zygote ' .
+                            '--renderer-process-limit=1 ' .
+                            '--disable-gpu ' .
+                            '--disable-software-rasterizer ' .
+                            '--disable-extensions ' .
+                            '--disable-crash-reporter ' .
+                            '--disable-breakpad ' .
+                            '--disable-background-networking ' .
+                            '--disable-sync ' .
+                            '--disable-translate ' .
+                            '--disable-application-cache ' .
+                            '--disk-cache-size=1 ' .
+                            '--media-cache-size=1 ' .
+                            '--user-data-dir=%s ' .
+                            '--data-path=%s ' .
+                            '--disk-cache-dir=%s/cache ' .
+                            '--js-flags="--max-old-space-size=128" ' .
+                            '--window-size=1280,800 ' .
+                            '--hide-scrollbars ' .
+                            '--screenshot=%s %s 2>&1',
+                            $timeoutSeconds,
+                            escapeshellarg($localTempDir),
+                            escapeshellarg($localTempDir),
+                            escapeshellarg($localTempDir),
+                            escapeshellarg($localTempFile),
+                            escapeshellarg($targetUrl)
+                        );
 
-                exec($cmd, $outputLines, $returnCode);
+                    exec($cmd, $outputLines, $returnCode);
 
-                if ($returnCode === 0 && file_exists($localTempFile) && filesize($localTempFile) > 0) {
-                    $remoteKey     = 'screenshots/' . $fileName;
+                    if ($returnCode === 0 && file_exists($localTempFile) && filesize($localTempFile) > 0) {
+                        $remoteKey     = 'screenshots/' . $fileName;
 
-                    try {
-                        // Upload con sovrascrittura diretta
-                        $result = $s3->putObject([
-                            'Bucket'      => $r2Config['bucketName'],
-                            'Key'         => $remoteKey,
-                            'SourceFile'  => $localTempFile,
-                            'ContentType' => 'image/jpeg',
-                            'CacheControl'=> 'public, max-age=86400', // Cache 24h nel browser
-                        ]);
+                        try {
+                            // Upload con sovrascrittura diretta
+                            $result = $s3->putObject([
+                                'Bucket'      => $r2Config['bucketName'],
+                                'Key'         => $remoteKey,
+                                'SourceFile'  => $localTempFile,
+                                'ContentType' => 'image/jpeg',
+                                'CacheControl'=> 'public, max-age=86400', // Cache 24h nel browser
+                            ]);
 
-                        $httpStatus = (int)($result['@metadata']['statusCode'] ?? 0);
-                        $etag = trim((string)($result['ETag'] ?? ''), '"');
+                            $httpStatus = (int)($result['@metadata']['statusCode'] ?? 0);
+                            $etag = trim((string)($result['ETag'] ?? ''), '"');
 
-                        if ($httpStatus === 200) {
-                            // Upload confermato: possiamo eliminare il file temporaneo locale
-                            @unlink($localTempFile);
+                            if ($httpStatus === 200) {
+                                // Upload confermato: possiamo eliminare il file temporaneo locale
+                                @unlink($localTempFile);
 
-                            $ente->setTag('screenshot', $fileName);
-                            $ente->setTag('screenshot_ts', date('Y-m-d H:i:s'));
-                            $ente->setTag('screenshot_etag', $etag); // Utile opzionalmente come checksum
+                                $ente->setTag('screenshot', $fileName);
+                                $ente->setTag('screenshot_ts', date('Y-m-d H:i:s'));
+                                $ente->setTag('screenshot_etag', $etag); // Utile opzionalmente come checksum
 
-                            $logger?->info("[{$codiceIpa}] Screenshot done and uploaded (ETag: {$etag})");
+                                $logger?->info("[{$codiceIpa}] Screenshot done and uploaded (ETag: {$etag})");
+                            }
+                        } catch (\Aws\Exception\AwsException $e) {
+                            $logger?->error("[{$codiceIpa}] Error while upload to R2: " . $e->getAwsErrorMessage() . " (HTTP " . $e->getStatusCode() . ")");
                         }
-                    } catch (\Aws\Exception\AwsException $e) {
-                        $logger?->error("[{$codiceIpa}] Error while upload to R2: " . $e->getAwsErrorMessage() . " (HTTP " . $e->getStatusCode() . ")");
+                    } else {
+                        $errorDetails = implode(' ', $outputLines);
+                        $logger?->warning("[{$codiceIpa}] Screenshot failed or timed out (Exit Code {$returnCode}): {$errorDetails}");
+                        $ente->setTag('screenshot', '');
                     }
-                } else {
-                    $errorDetails = implode(' ', $outputLines);
-                    $logger?->warning("[{$codiceIpa}] Screenshot failed or timed out (Exit Code {$returnCode}): {$errorDetails}");
-                    $ente->setTag('screenshot', '');
-                }
 
-            } catch (Throwable $e) {
-                $logger?->error("[{$codiceIpa}] Screenshot exception: " . $e->getMessage());
-                $ente->setTag('screenshot', 'none.jpg');
-            } finally {
-                @shell_exec('pkill -f -9 "google-chrome.*--headless" 2>/dev/null');
-                // 3. Rimozione forzata della directory temporanea (anche se timeout ha ucciso Chrome)
-                if (is_dir($localTempDir)) {
-                    exec('rm -rf ' . escapeshellarg($localTempDir));
+                } catch (Throwable $e) {
+                    $logger?->error("[{$codiceIpa}] Screenshot exception: " . $e->getMessage());
+                    $ente->setTag('screenshot', 'none.jpg');
+                } finally {
+                    @shell_exec('pkill -f -9 "google-chrome.*--headless" 2>/dev/null');
+                    // 3. Rimozione forzata della directory temporanea (anche se timeout ha ucciso Chrome)
+                    if (is_dir($localTempDir)) {
+                        exec('rm -rf ' . escapeshellarg($localTempDir));
+                    }
                 }
+            } else {
+                $logger?->warning("[{$codiceIpa}] Domain host does not resolve or site is offline. Skipping screenshot.");
+                $ente->setTag('screenshot', 'none.jpg');
             }
         } else {
-            $logger?->warning("[{$codiceIpa}] Domain host does not resolve or site is offline. Skipping screenshot.");
+            $logger?->warning("[{$codiceIpa}] Domain not healty. Skipping screenshot.");
             $ente->setTag('screenshot', 'none.jpg');
         }
 
@@ -1143,7 +1195,7 @@ try {
 
                 $execCmd = sprintf(
                     'timeout 30 whatweb %s -U %s -p %s --follow-redirect=always --log-json=%s 2>/dev/null',
-                    escapeshellarg($domain),
+                    escapeshellarg($workingDomain),
                     escapeshellarg(BOT_USER_AGENT),
                     escapeshellarg($plugins),
                     escapeshellarg($tmpFile)

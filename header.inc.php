@@ -107,6 +107,18 @@ $ogImage = isset($gbOgImage) && is_string($gbOgImage) ? $gbOgImage : 'https://' 
                 <div class="collapse navbar-collapse" id="navbarCollapse">
                     <ul class="navbar-nav me-auto ms-3 mb-2 mb-md-0">
                         <li class="nav-item">
+                            <a class="nav-link px-3 <?= str_starts_with($currentUri, '/index') ? 'active fw-semibold' : '' ?>" href="/">
+                                <i class="bi  bi-home me-1"></i> Home
+                            </a>
+                        </li>
+
+                        <li class="nav-item">
+                            <a class="nav-link px-3 <?= str_starts_with($currentUri, '/list') ? 'active fw-semibold' : '' ?>" href="/list">
+                                <i class="bi  bi-list me-1"></i> Enti
+                            </a>
+                        </li>
+
+                        <li class="nav-item">
                             <a class="nav-link px-3 <?= str_starts_with($currentUri, '/map') ? 'active fw-semibold' : '' ?>" href="/map">
                                 <i class="bi  bi-geo-alt-fill me-1"></i> Mappa
                             </a>

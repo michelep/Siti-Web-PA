@@ -33,8 +33,8 @@ require_once __DIR__ . '/header.inc.php';
         <!-- DASHBOARD TITLE / HERO SUB-HEADER -->
         <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-4 pb-2 border-bottom">
             <div>
-                <h2 class="h3 fw-bold mb-1">Panoramica Monitoraggio</h2>
-                <p class="text-muted mb-0">Analisi della presenza e della configurazione tecnica dei portali istituzionali</p>
+                <h2 class="h3 fw-bold mb-1">Panoramica</h2>
+                <p class="text-muted mb-0">Analisi tecnica dei portali istituzionali degli Enti pubblici</p>
             </div>
             <div class="mt-3 mt-md-0">
                 <span class="badge bg-white text-dark border px-3 py-2 rounded-pill shadow-sm">
@@ -230,34 +230,6 @@ require_once __DIR__ . '/header.inc.php';
             ?>
             </div>
         </div>
-
-        <!-- TABLE SECTION -->
-        <div>
-            <h4 class="h5 fw-bold mb-3"><i class="bi bi-table me-2 text-primary"></i>Elenco Completo Enti</h4>
-            <div class="table-card p-3">
-                <table id="table"
-                       data-toggle="table"
-                       data-height="550"
-                       data-pagination="true"
-                       data-side-pagination="server"
-                       data-search="true"
-                       data-show-search-button="true"
-                       data-search-highlight="true"
-                       data-classes="table table-hover table-borderless align-middle mb-0"
-                       data-url="/ajax/get_list">
-                    <thead class="table-light border-bottom">
-                        <tr>
-                            <th data-field="codice_ipa" data-sortable="true" data-width="120">Codice IPA</th>
-                            <th data-field="denominazione" data-sortable="true">Denominazione Ente</th>
-                            <th data-field="tipologia" data-sortable="true">Tipologia</th>
-                            <th data-field="sito_web" data-width="250">Sito Web</th>
-                            <th data-field="last_check" data-width="150">Ultimo controllo</th>
-                        </tr>
-                    </thead>
-                </table>
-            </div>
-        </div>
-
     </div>
 </main>
 <!-- /MAIN -->
